@@ -44,10 +44,14 @@ function pct(a: number, b: number) {
   return ((a / b) * 100).toFixed(1) + '%';
 }
 
+type SortKey = 'referrals' | 'conversions' | 'revenueCents' | 'commissionCents';
+
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>('conversions');
+  const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
 
   async function load() {
     try {
@@ -85,7 +89,22 @@ export default function Dashboard() {
     );
   }
 
-  const { overview, charts, affiliates, recentActivity } = data;
+  const { overview, charts, recentActivity } = data;
+
+  function handleSort(key: SortKey) {
+    if (sortKey === key) setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+    else { setSortKey(key); setSortDir('desc'); }
+  }
+
+  const affiliates = [...data.affiliates].sort((a, b) => {
+    const diff = a[sortKey] - b[sortKey];
+    return sortDir === 'desc' ? -diff : diff;
+  });
+
+  function SortIcon({ col }: { col: SortKey }) {
+    if (sortKey !== col) return <span className="ml-1 text-gray-300">↕</span>;
+    return <span className="ml-1 text-indigo-500">{sortDir === 'desc' ? '↓' : '↑'}</span>;
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -96,17 +115,9 @@ export default function Dashboard() {
             <h1 className="text-2xl font-bold text-gray-900">Affiliate Commission Dashboard</h1>
             <p className="text-sm text-gray-400 mt-1">Powered by Rewardful</p>
           </div>
-          <div className="text-right">
-            <p className="text-xs text-gray-400">
-              {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : ''}
-            </p>
-            <button
-              onClick={load}
-              className="mt-1 text-xs text-blue-500 hover:text-blue-700 font-medium"
-            >
-              Refresh
-            </button>
-          </div>
+          <p className="text-xs text-gray-400">
+            {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()} · auto-refreshes every 30s` : ''}
+          </p>
         </div>
 
         {/* Top metrics */}
@@ -132,18 +143,14 @@ export default function Dashboard() {
             bars={[{ key: 'count', color: '#6366f1', label: 'New affiliates' }]}
           />
           <DayOnDayChart
-            title="Referrals & Conversions (last 30 days)"
+            title="Conversions per Day (last 30 days)"
             data={charts.dailyReferrals}
-            bars={[
-              { key: 'total', color: '#94a3b8', label: 'Referrals' },
-              { key: 'converted', color: '#22c55e', label: 'Converted' },
-            ]}
+            bars={[{ key: 'converted', color: '#22c55e', label: 'Conversions' }]}
           />
           <DayOnDayChart
-            title="Revenue per Day (last 30 days)"
-            data={charts.dailyRevenue}
-            bars={[{ key: 'usd', color: '#3b82f6', label: 'Revenue' }]}
-            valuePrefix="$"
+            title="Referrals per Day (last 30 days)"
+            data={charts.dailyReferrals}
+            bars={[{ key: 'total', color: '#94a3b8', label: 'Referrals' }]}
           />
           <DayOnDayChart
             title="Commissions per Day (last 30 days)"
@@ -168,11 +175,19 @@ export default function Dashboard() {
                 <thead>
                   <tr className="text-xs text-gray-500 border-b border-gray-100">
                     <th className="text-left px-5 py-3 font-medium">Affiliate</th>
-                    <th className="text-right px-4 py-3 font-medium">Referrals</th>
-                    <th className="text-right px-4 py-3 font-medium">Conversions</th>
+                    <th className="text-right px-4 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('referrals')}>
+                      Referrals<SortIcon col="referrals" />
+                    </th>
+                    <th className="text-right px-4 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('conversions')}>
+                      Conversions<SortIcon col="conversions" />
+                    </th>
                     <th className="text-right px-4 py-3 font-medium">Conv. Rate</th>
-                    <th className="text-right px-4 py-3 font-medium">Revenue</th>
-                    <th className="text-right px-4 py-3 font-medium">Commission</th>
+                    <th className="text-right px-4 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('revenueCents')}>
+                      Revenue<SortIcon col="revenueCents" />
+                    </th>
+                    <th className="text-right px-4 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('commissionCents')}>
+                      Commission<SortIcon col="commissionCents" />
+                    </th>
                     <th className="text-left px-4 py-3 font-medium">Status</th>
                   </tr>
                 </thead>
