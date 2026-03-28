@@ -30,20 +30,32 @@ async function migrate() {
       status TEXT DEFAULT 'active',
       created_at TIMESTAMPTZ,
       confirmed_at TIMESTAMPTZ,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      visitors INT DEFAULT 0,
+      leads INT DEFAULT 0,
+      conversions INT DEFAULT 0
     )
   `;
+
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS visitors INT DEFAULT 0`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS leads INT DEFAULT 0`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS conversions INT DEFAULT 0`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS referrals (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       rewardful_id TEXT UNIQUE NOT NULL,
       affiliate_id TEXT,
+      link_id TEXT,
+      link_token TEXT,
       status TEXT DEFAULT 'lead',
       created_at TIMESTAMPTZ,
       converted_at TIMESTAMPTZ
     )
   `;
+
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS link_id TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS link_token TEXT`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS sales (

@@ -19,14 +19,14 @@ export async function GET() {
     sql`
       SELECT
         COUNT(*) AS total,
-        COUNT(*) FILTER (WHERE status != 'inactive' AND status != 'deleted') AS active
+        COUNT(CASE WHEN status != 'inactive' AND status != 'deleted' THEN 1 END) AS active
       FROM affiliates
     `,
     // Overview: referral counts
     sql`
       SELECT
         COUNT(*) AS total,
-        COUNT(*) FILTER (WHERE status = 'converted') AS converted
+        COUNT(CASE WHEN status = 'converted' THEN 1 END) AS converted
       FROM referrals
       WHERE status != 'deleted'
     `,
@@ -40,8 +40,8 @@ export async function GET() {
     // Overview: commissions
     sql`
       SELECT
-        COALESCE(SUM(amount_cents), 0) FILTER (WHERE status IN ('created', 'paid')) AS total_cents,
-        COALESCE(SUM(amount_cents), 0) FILTER (WHERE status = 'paid') AS paid_cents
+        COALESCE(SUM(CASE WHEN status IN ('created', 'paid') THEN amount_cents ELSE 0 END), 0) AS total_cents,
+        COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_cents ELSE 0 END), 0) AS paid_cents
       FROM commissions
       WHERE status != 'deleted' AND status != 'voided'
     `,
@@ -66,7 +66,7 @@ export async function GET() {
       SELECT
         DATE(created_at) AS day,
         COUNT(*) AS total,
-        COUNT(*) FILTER (WHERE status = 'converted') AS converted
+        COUNT(CASE WHEN status = 'converted' THEN 1 END) AS converted
       FROM referrals
       WHERE created_at >= NOW() - INTERVAL '30 days'
         AND status != 'deleted'
@@ -105,9 +105,9 @@ export async function GET() {
         a.status,
         a.created_at,
         COUNT(DISTINCT r.rewardful_id) AS referrals,
-        COUNT(DISTINCT r.rewardful_id) FILTER (WHERE r.status = 'converted') AS conversions,
+        COUNT(DISTINCT CASE WHEN r.status = 'converted' THEN r.rewardful_id END) AS conversions,
         COALESCE(SUM(DISTINCT s.amount_cents), 0) AS revenue_cents,
-        COALESCE(SUM(DISTINCT c.amount_cents) FILTER (WHERE c.status NOT IN ('deleted', 'voided')), 0) AS commission_cents
+        COALESCE(SUM(DISTINCT CASE WHEN c.status NOT IN ('deleted', 'voided') THEN c.amount_cents END), 0) AS commission_cents
       FROM affiliates a
       LEFT JOIN referrals r ON r.affiliate_id = a.rewardful_id
       LEFT JOIN sales s ON s.affiliate_id = a.rewardful_id AND s.status = 'created'
