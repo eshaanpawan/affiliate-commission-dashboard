@@ -11,8 +11,9 @@ const BASE_URL = 'https://api.getrewardful.com/v1';
 const authHeader = 'Basic ' + Buffer.from(API_SECRET + ':').toString('base64');
 
 const FROM_DATE = new Date('2026-01-01T00:00:00Z');
+const ALL_TIME_DATE = new Date('2020-01-01T00:00:00Z');
 
-async function fetchAll(path: string): Promise<unknown[]> {
+async function fetchAll(path: string, fromDate: Date = FROM_DATE): Promise<unknown[]> {
   const results: unknown[] = [];
   let page = 1;
 
@@ -29,16 +30,15 @@ async function fetchAll(path: string): Promise<unknown[]> {
 
     const json = await res.json() as { data: Record<string, unknown>[]; pagination: { total_pages: number } };
 
-    // Filter to only records from January 2026 onwards; stop paginating if we hit older records
     const filtered = json.data.filter((r) => {
       const date = new Date(r.created_at as string);
-      return date >= FROM_DATE;
+      return date >= fromDate;
     });
     results.push(...filtered);
 
     const oldest = json.data[json.data.length - 1];
     const oldestDate = oldest ? new Date(oldest.created_at as string) : new Date();
-    const allOlder = oldestDate < FROM_DATE;
+    const allOlder = oldestDate < fromDate;
 
     console.log(`  ${path} page ${page}/${json.pagination.total_pages} — fetched ${filtered.length} in-range records`);
 
@@ -160,12 +160,43 @@ async function backfillReferrals(referrals: any[], linkMap: Map<string, string>)
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function backfillSales(sales: any[], linkMap: Map<string, string>) {
+  for (const batch of chunks(dedupe(sales), 500)) {
+    const rows = batch.map((s) => {
+      const linkId = (s.referral as { link?: { id: string } } | null)?.link?.id ?? null;
+      const affiliateId = (s.affiliate as { id: string } | null)?.id ?? (linkId ? (linkMap.get(linkId) ?? null) : null);
+      const status = s.refunded_at ? 'refunded' : 'created';
+      return [
+        s.id, affiliateId, (s.referral as { id: string } | null)?.id ?? null,
+        s.sale_amount_cents ?? 0, s.currency ?? 'usd',
+        status, s.created_at ?? null,
+      ];
+    });
+    await sql`
+      INSERT INTO sales (rewardful_id, affiliate_id, referral_id, amount_cents, currency, status, created_at)
+      SELECT * FROM unnest(
+        ${rows.map(r => r[0])}::text[],
+        ${rows.map(r => r[1])}::text[],
+        ${rows.map(r => r[2])}::text[],
+        ${rows.map(r => r[3])}::int[],
+        ${rows.map(r => r[4])}::text[],
+        ${rows.map(r => r[5])}::text[],
+        ${rows.map(r => r[6])}::timestamptz[]
+      ) AS t(rewardful_id, affiliate_id, referral_id, amount_cents, currency, status, created_at)
+      ON CONFLICT (rewardful_id) DO UPDATE SET
+        status = EXCLUDED.status,
+        amount_cents = EXCLUDED.amount_cents
+    `;
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function backfillCommissions(commissions: any[]) {
   for (const batch of chunks(dedupe(commissions), 500)) {
     const rows = batch.map((c) => [
       c.id, c.affiliate?.id ?? null, c.sale?.id ?? null,
       c.amount ?? 0, c.currency ?? 'usd',
-      c.paid_at ? 'paid' : c.voided_at ? 'voided' : (c.state ?? 'pending'),
+      c.paid_at ? 'paid' : c.voided_at ? 'voided' : 'created',
       c.created_at ?? null, c.paid_at ?? null,
     ]);
     await sql`
@@ -220,7 +251,7 @@ async function main() {
   console.log('Starting backfill from Rewardful API...\n');
 
   console.log('Fetching affiliates (with links)...');
-  const affiliates = await fetchAll('/affiliates?expand[]=links');
+  const affiliates = await fetchAll('/affiliates?expand[]=links', ALL_TIME_DATE);
   console.log(`→ Inserting ${affiliates.length} affiliates into DB...`);
   await backfillAffiliates(affiliates as never[]);
   console.log('✅ Affiliates done\n');
@@ -234,6 +265,12 @@ async function main() {
   console.log(`→ Inserting ${referrals.length} referrals into DB...`);
   await backfillReferrals(referrals as never[], linkMap);
   console.log('✅ Referrals done\n');
+
+  console.log('Fetching sales...');
+  const sales = await fetchAll('/sales');
+  console.log(`→ Inserting ${sales.length} sales into DB...`);
+  await backfillSales(sales as never[], linkMap);
+  console.log('✅ Sales done\n');
 
   console.log('Fetching commissions...');
   const commissions = await fetchAll('/commissions');

@@ -14,6 +14,9 @@ export async function GET() {
     dailyCommissions,
     affiliateList,
     recentEvents,
+    weeklyLeaderboard,
+    topByReferrals,
+    topByConversions,
     monthlyReferrals,
     monthlyRevenue,
     monthlyCommissions,
@@ -43,10 +46,10 @@ export async function GET() {
     // Overview: commissions
     sql`
       SELECT
-        COALESCE(SUM(CASE WHEN status IN ('created', 'paid') THEN amount_cents ELSE 0 END), 0) AS total_cents,
-        COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_cents ELSE 0 END), 0) AS paid_cents
-      FROM commissions
-      WHERE status != 'deleted' AND status != 'voided'
+        COALESCE(SUM(unpaid_commission_cents + paid_commission_cents), 0) AS total_cents,
+        COALESCE(SUM(paid_commission_cents), 0) AS paid_cents
+      FROM affiliates
+      WHERE status != 'deleted'
     `,
     // Overview: pending payouts
     sql`
@@ -107,18 +110,30 @@ export async function GET() {
         a.email,
         a.status,
         a.created_at,
-        COUNT(DISTINCT r.rewardful_id) AS referrals,
-        COUNT(DISTINCT CASE WHEN r.status = 'converted' THEN r.rewardful_id END) AS conversions,
-        COALESCE(SUM(DISTINCT s.amount_cents), 0) AS revenue_cents,
-        COALESCE(SUM(DISTINCT CASE WHEN c.status NOT IN ('deleted', 'voided') THEN c.amount_cents END), 0) AS commission_cents
+        COALESCE(r_stats.referrals, 0) AS referrals,
+        COALESCE(r_stats.conversions, 0) AS conversions,
+        COALESCE(r_stats.referrals_today, 0) AS referrals_today,
+        COALESCE(r_stats.conversions_today, 0) AS conversions_today,
+        COALESCE(s_stats.revenue_cents, 0) AS revenue_cents,
+        a.unpaid_commission_cents AS commission_cents
       FROM affiliates a
-      LEFT JOIN referrals r ON r.affiliate_id = a.rewardful_id
-      LEFT JOIN sales s ON s.affiliate_id = a.rewardful_id AND s.status = 'created'
-      LEFT JOIN commissions c ON c.affiliate_id = a.rewardful_id
+      LEFT JOIN (
+        SELECT
+          affiliate_id,
+          COUNT(*) AS referrals,
+          COUNT(CASE WHEN status = 'converted' THEN 1 END) AS conversions,
+          COUNT(CASE WHEN created_at >= CURRENT_DATE THEN 1 END) AS referrals_today,
+          COUNT(CASE WHEN status = 'converted' AND converted_at >= CURRENT_DATE THEN 1 END) AS conversions_today
+        FROM referrals WHERE status != 'deleted'
+        GROUP BY affiliate_id
+      ) r_stats ON r_stats.affiliate_id = a.rewardful_id
+      LEFT JOIN (
+        SELECT affiliate_id, SUM(amount_cents) AS revenue_cents
+        FROM sales WHERE status = 'created'
+        GROUP BY affiliate_id
+      ) s_stats ON s_stats.affiliate_id = a.rewardful_id
       WHERE a.status != 'deleted'
-      GROUP BY a.rewardful_id, a.first_name, a.last_name, a.email, a.status, a.created_at
-      ORDER BY revenue_cents DESC
-      LIMIT 50
+      ORDER BY conversions DESC, referrals DESC
     `,
     // Recent activity
     sql`
@@ -127,7 +142,43 @@ export async function GET() {
       ORDER BY received_at DESC
       LIMIT 20
     `,
-
+    // Weekly leaderboard
+    sql`
+      SELECT
+        a.first_name, a.last_name, a.email,
+        COUNT(DISTINCT CASE WHEN r.status = 'converted' AND r.converted_at >= DATE_TRUNC('week', NOW()) THEN r.rewardful_id END) AS conversions_this_week,
+        COUNT(DISTINCT CASE WHEN r.created_at >= DATE_TRUNC('week', NOW()) THEN r.rewardful_id END) AS referrals_this_week
+      FROM affiliates a
+      LEFT JOIN referrals r ON r.affiliate_id = a.rewardful_id
+      WHERE a.status != 'deleted'
+      GROUP BY a.first_name, a.last_name, a.email
+      ORDER BY conversions_this_week DESC, referrals_this_week DESC
+      LIMIT 10
+    `,
+    // Top affiliates by referrals (for pie chart)
+    sql`
+      SELECT
+        a.first_name, a.last_name, a.email,
+        COUNT(DISTINCT r.rewardful_id) AS referrals
+      FROM affiliates a
+      LEFT JOIN referrals r ON r.affiliate_id = a.rewardful_id AND r.status != 'deleted'
+      WHERE a.status != 'deleted'
+      GROUP BY a.first_name, a.last_name, a.email
+      ORDER BY referrals DESC
+      LIMIT 15
+    `,
+    // Top affiliates by conversions (for pie chart)
+    sql`
+      SELECT
+        a.first_name, a.last_name, a.email,
+        COUNT(DISTINCT CASE WHEN r.status = 'converted' THEN r.rewardful_id END) AS conversions
+      FROM affiliates a
+      LEFT JOIN referrals r ON r.affiliate_id = a.rewardful_id
+      WHERE a.status != 'deleted'
+      GROUP BY a.first_name, a.last_name, a.email
+      ORDER BY conversions DESC
+      LIMIT 15
+    `,
     // Monthly referrals + conversions (all time)
     sql`
       SELECT
@@ -139,7 +190,6 @@ export async function GET() {
       GROUP BY DATE_TRUNC('month', created_at)
       ORDER BY month
     `,
-
     // Monthly revenue (all time)
     sql`
       SELECT
@@ -150,7 +200,6 @@ export async function GET() {
       GROUP BY DATE_TRUNC('month', created_at)
       ORDER BY month
     `,
-
     // Monthly commissions (all time)
     sql`
       SELECT
@@ -220,10 +269,27 @@ export async function GET() {
       createdAt: a.created_at,
       referrals: Number(a.referrals),
       conversions: Number(a.conversions),
+      referralsToday: Number(a.referrals_today),
+      conversionsToday: Number(a.conversions_today),
       revenueCents: Number(a.revenue_cents),
       commissionCents: Number(a.commission_cents),
     })),
     recentActivity: recentEvents,
     monthly,
+    weeklyLeaderboard: weeklyLeaderboard.map((a, i) => ({
+      rank: i + 1,
+      name: [a.first_name, a.last_name].filter(Boolean).join(' ') || a.email,
+      email: a.email,
+      conversionsThisWeek: Number(a.conversions_this_week),
+      referralsThisWeek: Number(a.referrals_this_week),
+    })),
+    topByReferrals: topByReferrals.map((a) => ({
+      name: [a.first_name, a.last_name].filter(Boolean).join(' ') || a.email,
+      value: Number(a.referrals),
+    })),
+    topByConversions: topByConversions.map((a) => ({
+      name: [a.first_name, a.last_name].filter(Boolean).join(' ') || a.email,
+      value: Number(a.conversions),
+    })),
   });
 }
