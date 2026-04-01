@@ -14,6 +14,9 @@ export async function GET() {
     dailyCommissions,
     affiliateList,
     recentEvents,
+    monthlyReferrals,
+    monthlyRevenue,
+    monthlyCommissions,
   ] = await Promise.all([
     // Overview: affiliate counts
     sql`
@@ -124,7 +127,60 @@ export async function GET() {
       ORDER BY received_at DESC
       LIMIT 20
     `,
+
+    // Monthly referrals + conversions (all time)
+    sql`
+      SELECT
+        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+        COUNT(*) AS referrals,
+        COUNT(CASE WHEN status = 'converted' THEN 1 END) AS conversions
+      FROM referrals
+      WHERE status != 'deleted'
+      GROUP BY DATE_TRUNC('month', created_at)
+      ORDER BY month
+    `,
+
+    // Monthly revenue (all time)
+    sql`
+      SELECT
+        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+        COALESCE(SUM(amount_cents), 0) AS revenue_cents
+      FROM sales
+      WHERE status = 'created'
+      GROUP BY DATE_TRUNC('month', created_at)
+      ORDER BY month
+    `,
+
+    // Monthly commissions (all time)
+    sql`
+      SELECT
+        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+        COALESCE(SUM(amount_cents), 0) AS commission_cents
+      FROM commissions
+      WHERE status NOT IN ('deleted', 'voided')
+      GROUP BY DATE_TRUNC('month', created_at)
+      ORDER BY month
+    `,
   ]);
+
+  // Merge monthly data by month key
+  const monthMap = new Map<string, { month: string; referrals: number; conversions: number; revenueCents: number; commissionCents: number }>();
+  for (const r of monthlyReferrals) {
+    monthMap.set(String(r.month), { month: String(r.month), referrals: Number(r.referrals), conversions: Number(r.conversions), revenueCents: 0, commissionCents: 0 });
+  }
+  for (const r of monthlyRevenue) {
+    const key = String(r.month);
+    const entry = monthMap.get(key) ?? { month: key, referrals: 0, conversions: 0, revenueCents: 0, commissionCents: 0 };
+    entry.revenueCents = Number(r.revenue_cents);
+    monthMap.set(key, entry);
+  }
+  for (const r of monthlyCommissions) {
+    const key = String(r.month);
+    const entry = monthMap.get(key) ?? { month: key, referrals: 0, conversions: 0, revenueCents: 0, commissionCents: 0 };
+    entry.commissionCents = Number(r.commission_cents);
+    monthMap.set(key, entry);
+  }
+  const monthly = Array.from(monthMap.values()).sort((a, b) => a.month.localeCompare(b.month));
 
   return NextResponse.json({
     overview: {
@@ -168,5 +224,6 @@ export async function GET() {
       commissionCents: Number(a.commission_cents),
     })),
     recentActivity: recentEvents,
+    monthly,
   });
 }

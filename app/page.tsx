@@ -3,6 +3,16 @@
 import { useEffect, useState } from 'react';
 import { MetricCard } from '@/components/MetricCard';
 import { DayOnDayChart } from '@/components/DayOnDayChart';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  Legend,
+} from 'recharts';
 
 interface DashboardData {
   overview: {
@@ -33,6 +43,13 @@ interface DashboardData {
     commissionCents: number;
   }[];
   recentActivity: { event_type: string; received_at: string; event_id: string }[];
+  monthly: {
+    month: string;
+    referrals: number;
+    conversions: number;
+    revenueCents: number;
+    commissionCents: number;
+  }[];
 }
 
 function fmt(cents: number) {
@@ -159,6 +176,76 @@ export default function Dashboard() {
             valuePrefix="$"
           />
         </div>
+
+        {/* Month-on-Month */}
+        {data.monthly.length > 0 && (
+          <div className="mb-8">
+            <h2 className="text-sm font-semibold text-gray-700 mb-4">Month-on-Month</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              {/* Conversions MoM */}
+              <div className="bg-white rounded-xl border border-gray-200 p-5">
+                <p className="text-sm font-semibold text-gray-700 mb-4">Conversions per Month</p>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={data.monthly.map(m => ({ month: new Date(m.month + '-02').toLocaleDateString('en-US', { month: 'short', year: '2-digit' }), conversions: m.conversions, referrals: m.referrals }))} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="conversions" name="Conversions" fill="#22c55e" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="referrals" name="Referrals" fill="#94a3b8" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              {/* Revenue vs Commissions MoM */}
+              <div className="bg-white rounded-xl border border-gray-200 p-5">
+                <p className="text-sm font-semibold text-gray-700 mb-4">Revenue vs Commissions per Month</p>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={data.monthly.map(m => ({ month: new Date(m.month + '-02').toLocaleDateString('en-US', { month: 'short', year: '2-digit' }), revenue: m.revenueCents / 100, commissions: m.commissionCents / 100 }))} margin={{ top: 0, right: 0, left: -10, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `$${v}`} />
+                    <Tooltip formatter={(v) => `$${Number(v).toFixed(2)}`} />
+                    <Legend />
+                    <Bar dataKey="revenue" name="Revenue" fill="#6366f1" radius={[3, 3, 0, 0]} />
+                    <Bar dataKey="commissions" name="Commissions" fill="#f59e0b" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            {/* MoM summary table */}
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-gray-500 border-b border-gray-100">
+                      <th className="text-left px-5 py-3 font-medium">Month</th>
+                      <th className="text-right px-4 py-3 font-medium">Referrals</th>
+                      <th className="text-right px-4 py-3 font-medium">Conversions</th>
+                      <th className="text-right px-4 py-3 font-medium">Conv. Rate</th>
+                      <th className="text-right px-4 py-3 font-medium">Revenue</th>
+                      <th className="text-right px-4 py-3 font-medium">Commissions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.monthly.map((m) => (
+                      <tr key={m.month} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="px-5 py-3 font-medium text-gray-900">
+                          {new Date(m.month + '-02').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                        </td>
+                        <td className="px-4 py-3 text-right text-gray-700">{m.referrals.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right font-medium text-green-600">{m.conversions.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right text-gray-500">{pct(m.conversions, m.referrals)}</td>
+                        <td className="px-4 py-3 text-right font-medium text-gray-900">{fmt(m.revenueCents)}</td>
+                        <td className="px-4 py-3 text-right text-amber-600">{fmt(m.commissionCents)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Affiliates table */}
         <div className="bg-white rounded-xl border border-gray-200 mb-8 overflow-hidden">
