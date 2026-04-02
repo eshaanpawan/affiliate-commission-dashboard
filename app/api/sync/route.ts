@@ -152,8 +152,30 @@ export async function POST() {
       }
     }
 
+    // Refresh commission stats for all affiliates from Rewardful individual endpoint
+    const allAffiliates = await sql`SELECT rewardful_id FROM affiliates WHERE status != 'deleted'`;
+    let commissionStatsUpdated = 0;
+    for (const { rewardful_id } of allAffiliates) {
+      const affRes = await fetch(`${BASE_URL}/affiliates/${rewardful_id}`, {
+        headers: { Authorization: authHeader },
+      });
+      if (!affRes.ok) { await new Promise(r => setTimeout(r, 200)); continue; }
+      const affData = await affRes.json() as Record<string, unknown>;
+      const stats = (affData.commission_stats as { currencies?: { USD?: { unpaid?: { cents?: number }; paid?: { cents?: number }; gross_revenue?: { cents?: number } } } })?.currencies?.USD;
+      const unpaid = stats?.unpaid?.cents ?? 0;
+      const paid = stats?.paid?.cents ?? 0;
+      const gross = stats?.gross_revenue?.cents ?? 0;
+      await sql`
+        UPDATE affiliates
+        SET unpaid_commission_cents = ${unpaid}, paid_commission_cents = ${paid}, gross_revenue_cents = ${gross}
+        WHERE rewardful_id = ${rewardful_id}
+      `;
+      commissionStatsUpdated++;
+      await new Promise(r => setTimeout(r, 100));
+    }
+
     return NextResponse.json({
-      synced: { affiliates: affiliates.length, referrals: referrals.length, sales: sales.length, commissions: commissions.length },
+      synced: { affiliates: affiliates.length, referrals: referrals.length, sales: sales.length, commissions: commissions.length, commissionStatsUpdated },
       syncedAt: new Date().toISOString(),
     });
   } catch (err) {
