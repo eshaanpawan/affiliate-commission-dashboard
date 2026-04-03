@@ -9,7 +9,7 @@ const authHeader = 'Basic ' + Buffer.from(API_SECRET + ':').toString('base64');
 async function fetchRecent(path: string, cutoff: Date): Promise<Record<string, unknown>[]> {
   const results: Record<string, unknown>[] = [];
   let page = 1;
-  while (page <= 10) {
+  while (page <= 20) {
     const sep = path.includes('?') ? '&' : '?';
     const res = await fetch(`${BASE_URL}${path}${sep}page=${page}&limit=100`, {
       headers: { Authorization: authHeader },
@@ -26,6 +26,23 @@ async function fetchRecent(path: string, cutoff: Date): Promise<Record<string, u
   return results;
 }
 
+async function fetchAllAffiliates(): Promise<Record<string, unknown>[]> {
+  const results: Record<string, unknown>[] = [];
+  let page = 1;
+  while (true) {
+    const res = await fetch(`${BASE_URL}/affiliates?page=${page}&limit=100&expand[]=links`, {
+      headers: { Authorization: authHeader },
+    });
+    if (!res.ok) break;
+    const json = await res.json() as { data: Record<string, unknown>[]; pagination: { total_pages: number } };
+    results.push(...json.data);
+    if (page >= json.pagination.total_pages) break;
+    page++;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return results;
+}
+
 function chunks<T>(arr: T[], size: number): T[][] {
   const result: T[][] = [];
   for (let i = 0; i < arr.length; i += size) result.push(arr.slice(i, i + size));
@@ -35,11 +52,14 @@ function chunks<T>(arr: T[], size: number): T[][] {
 export async function POST() {
   if (!API_SECRET) return NextResponse.json({ error: 'No API secret configured' }, { status: 500 });
 
-  const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000); // last 6 hours
+  // Use 48h window to catch any data gaps from missed syncs
+  const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
 
   try {
-    // Sync affiliates
-    const affiliates = await fetchRecent('/affiliates?expand[]=links', cutoff);
+    // Sync ALL affiliates (not just recent) to keep visitor/lead/conversion counts current
+    const affiliates = await fetchAllAffiliates();
+    const linkMap = new Map<string, string>();
+
     if (affiliates.length > 0) {
       for (const batch of chunks(affiliates, 100)) {
         const rows = batch.map((a) => [
@@ -63,17 +83,16 @@ export async function POST() {
             visitors = EXCLUDED.visitors, leads = EXCLUDED.leads, conversions = EXCLUDED.conversions
         `;
       }
-    }
 
-    // Build link map
-    const linkMap = new Map<string, string>();
-    for (const a of affiliates) {
-      for (const l of ((a.links as { id: string }[]) ?? [])) {
-        linkMap.set(l.id, a.id as string);
+      // Build link map from all affiliates
+      for (const a of affiliates) {
+        for (const l of ((a.links as { id: string }[]) ?? [])) {
+          linkMap.set(l.id, a.id as string);
+        }
       }
     }
 
-    // Sync referrals
+    // Sync referrals (last 48h)
     const referrals = await fetchRecent('/referrals', cutoff);
     if (referrals.length > 0) {
       for (const batch of chunks(referrals, 100)) {
@@ -101,18 +120,16 @@ export async function POST() {
       }
     }
 
-    // Sync sales
+    // Sync sales (last 48h)
     const sales = await fetchRecent('/sales', cutoff);
     if (sales.length > 0) {
       for (const batch of chunks(sales, 100)) {
-        const rows = batch.map((s) => {
-          return [
-            s.id, (s.affiliate as { id: string } | null)?.id ?? null,
-            (s.referral as { id: string } | null)?.id ?? null,
-            s.sale_amount_cents ?? 0, s.currency ?? 'usd',
-            s.refunded_at ? 'refunded' : 'created', s.created_at ?? null,
-          ];
-        });
+        const rows = batch.map((s) => [
+          s.id, (s.affiliate as { id: string } | null)?.id ?? null,
+          (s.referral as { id: string } | null)?.id ?? null,
+          s.sale_amount_cents ?? 0, s.currency ?? 'usd',
+          s.refunded_at ? 'refunded' : 'created', s.created_at ?? null,
+        ]);
         await sql`
           INSERT INTO sales (rewardful_id, affiliate_id, referral_id, amount_cents, currency, status, created_at)
           SELECT * FROM unnest(
@@ -126,7 +143,7 @@ export async function POST() {
       }
     }
 
-    // Sync commissions
+    // Sync commissions (last 48h)
     const commissions = await fetchRecent('/commissions', cutoff);
     if (commissions.length > 0) {
       for (const batch of chunks(commissions, 100)) {
@@ -152,11 +169,33 @@ export async function POST() {
       }
     }
 
-    // Refresh commission stats for all affiliates from Rewardful individual endpoint
-    const allAffiliates = await sql`SELECT rewardful_id FROM affiliates WHERE status != 'deleted'`;
+    // Refresh commission stats for all affiliates using their commission_stats from Rewardful
+    // We already have all affiliates fetched above — use that data directly if commission_stats is present,
+    // otherwise fall back to individual API calls for affiliates missing the field.
     let commissionStatsUpdated = 0;
-    for (const { rewardful_id } of allAffiliates) {
-      const affRes = await fetch(`${BASE_URL}/affiliates/${rewardful_id}`, {
+    const affiliatesNeedingStats = affiliates.filter(a => !(a.commission_stats));
+
+    // Update from the full list first (commission_stats may be included in list response)
+    for (const batch of chunks(affiliates, 100)) {
+      const withStats = batch.filter(a => a.commission_stats);
+      if (withStats.length === 0) continue;
+      for (const a of withStats) {
+        const stats = (a.commission_stats as { currencies?: { USD?: { unpaid?: { cents?: number }; paid?: { cents?: number }; gross_revenue?: { cents?: number } } } })?.currencies?.USD;
+        const unpaid = stats?.unpaid?.cents ?? 0;
+        const paid = stats?.paid?.cents ?? 0;
+        const gross = stats?.gross_revenue?.cents ?? 0;
+        await sql`
+          UPDATE affiliates
+          SET unpaid_commission_cents = ${unpaid}, paid_commission_cents = ${paid}, gross_revenue_cents = ${gross}
+          WHERE rewardful_id = ${a.id as string}
+        `;
+        commissionStatsUpdated++;
+      }
+    }
+
+    // For affiliates without commission_stats in list response, fetch individually
+    for (const a of affiliatesNeedingStats) {
+      const affRes = await fetch(`${BASE_URL}/affiliates/${a.id as string}`, {
         headers: { Authorization: authHeader },
       });
       if (!affRes.ok) { await new Promise(r => setTimeout(r, 200)); continue; }
@@ -168,7 +207,7 @@ export async function POST() {
       await sql`
         UPDATE affiliates
         SET unpaid_commission_cents = ${unpaid}, paid_commission_cents = ${paid}, gross_revenue_cents = ${gross}
-        WHERE rewardful_id = ${rewardful_id}
+        WHERE rewardful_id = ${a.id as string}
       `;
       commissionStatsUpdated++;
       await new Promise(r => setTimeout(r, 100));

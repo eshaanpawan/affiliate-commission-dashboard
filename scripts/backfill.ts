@@ -19,16 +19,28 @@ async function fetchAll(path: string, fromDate: Date = FROM_DATE): Promise<unkno
 
   while (true) {
     const sep = path.includes('?') ? '&' : '?';
-    const res = await fetch(`${BASE_URL}${path}${sep}page=${page}&limit=100`, {
-      headers: { Authorization: authHeader },
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`API error for ${path} page ${page}: ${res.status} ${text}`);
+    let res: Response;
+    let retries = 0;
+    while (true) {
+      res = await fetch(`${BASE_URL}${path}${sep}page=${page}&limit=100`, {
+        headers: { Authorization: authHeader },
+      });
+      if (res.status === 429) {
+        retries++;
+        const wait = 2000 * retries;
+        console.log(`  Rate limited on page ${page}, waiting ${wait}ms...`);
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      break;
     }
 
-    const json = await res.json() as { data: Record<string, unknown>[]; pagination: { total_pages: number } };
+    if (!res!.ok) {
+      const text = await res!.text();
+      throw new Error(`API error for ${path} page ${page}: ${res!.status} ${text}`);
+    }
+
+    const json = await res!.json() as { data: Record<string, unknown>[]; pagination: { total_pages: number } };
 
     const filtered = json.data.filter((r) => {
       const date = new Date(r.created_at as string);
@@ -40,13 +52,13 @@ async function fetchAll(path: string, fromDate: Date = FROM_DATE): Promise<unkno
     const oldestDate = oldest ? new Date(oldest.created_at as string) : new Date();
     const allOlder = oldestDate < fromDate;
 
-    console.log(`  ${path} page ${page}/${json.pagination.total_pages} — fetched ${filtered.length} in-range records`);
+    console.log(`  ${path} page ${page}/${json.pagination.total_pages} — fetched ${filtered.length} in-range records (total so far: ${results.length})`);
 
     if (page >= json.pagination.total_pages || allOlder) break;
     page++;
 
-    // Avoid rate limiting
-    await new Promise((r) => setTimeout(r, 400));
+    // Avoid rate limiting — 800ms between requests
+    await new Promise((r) => setTimeout(r, 800));
   }
 
   return results;
@@ -260,26 +272,26 @@ async function main() {
   const linkMap = await buildLinkMap();
   console.log(`→ Built map with ${linkMap.size} links\n`);
 
-  console.log('Fetching referrals...');
-  const referrals = await fetchAll('/referrals');
+  console.log('Fetching referrals (all time)...');
+  const referrals = await fetchAll('/referrals', ALL_TIME_DATE);
   console.log(`→ Inserting ${referrals.length} referrals into DB...`);
   await backfillReferrals(referrals as never[], linkMap);
   console.log('✅ Referrals done\n');
 
-  console.log('Fetching sales...');
-  const sales = await fetchAll('/sales');
+  console.log('Fetching sales (all time)...');
+  const sales = await fetchAll('/sales', ALL_TIME_DATE);
   console.log(`→ Inserting ${sales.length} sales into DB...`);
   await backfillSales(sales as never[], linkMap);
   console.log('✅ Sales done\n');
 
-  console.log('Fetching commissions...');
-  const commissions = await fetchAll('/commissions');
+  console.log('Fetching commissions (all time)...');
+  const commissions = await fetchAll('/commissions', ALL_TIME_DATE);
   console.log(`→ Inserting ${commissions.length} commissions into DB...`);
   await backfillCommissions(commissions as never[]);
   console.log('✅ Commissions done\n');
 
-  console.log('Fetching payouts...');
-  const payouts = await fetchAll('/payouts');
+  console.log('Fetching payouts (all time)...');
+  const payouts = await fetchAll('/payouts', ALL_TIME_DATE);
   console.log(`→ Inserting ${payouts.length} payouts into DB...`);
   await backfillPayouts(payouts as never[]);
   console.log('✅ Payouts done\n');
