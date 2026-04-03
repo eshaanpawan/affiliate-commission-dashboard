@@ -40,7 +40,7 @@ export function TopAffiliatesPie({ title, data, label }: Props) {
               ))}
             </Pie>
             <Tooltip
-              formatter={(value: number, name: string) => [`${value} ${label}`, name]}
+              formatter={(value, name) => [`${value} ${label}`, name as string]}
             />
             <Legend
               formatter={(value) => (
