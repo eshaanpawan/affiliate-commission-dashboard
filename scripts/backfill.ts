@@ -232,6 +232,37 @@ async function backfillCommissions(commissions: any[]) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function backfillSales(sales: any[]) {
+  for (const batch of chunks(dedupe(sales), 500)) {
+    const rows = batch.map((s) => [
+      s.id,
+      s.affiliate?.id ?? null,
+      s.referral?.id ?? null,
+      s.sale_amount_cents ?? 0,
+      (s.currency ?? 'USD').toLowerCase(),
+      s.refund ? 'refunded' : 'created',
+      s.created_at ?? null,
+    ]);
+    await sql`
+      INSERT INTO sales (rewardful_id, affiliate_id, referral_id, amount_cents, currency, status, created_at)
+      SELECT * FROM unnest(
+        ${rows.map(r => r[0])}::text[],
+        ${rows.map(r => r[1])}::text[],
+        ${rows.map(r => r[2])}::text[],
+        ${rows.map(r => r[3])}::int[],
+        ${rows.map(r => r[4])}::text[],
+        ${rows.map(r => r[5])}::text[],
+        ${rows.map(r => r[6])}::timestamptz[]
+      ) AS t(rewardful_id, affiliate_id, referral_id, amount_cents, currency, status, created_at)
+      ON CONFLICT (rewardful_id) DO UPDATE SET
+        status = EXCLUDED.status,
+        amount_cents = EXCLUDED.amount_cents
+    `;
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function backfillPayouts(payouts: any[]) {
   for (const batch of chunks(dedupe(payouts), 500)) {
     const rows = batch.map((p) => [
