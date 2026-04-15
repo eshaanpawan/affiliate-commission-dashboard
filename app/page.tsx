@@ -149,6 +149,20 @@ function AffiliateModal({ affiliate, onClose }: { affiliate: Affiliate; onClose:
   );
 }
 
+function InfoTooltip({ text }: { text: string }) {
+  return (
+    <div className="relative group inline-flex items-center ml-2">
+      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-100 hover:bg-indigo-100 text-gray-400 hover:text-indigo-500 cursor-help text-[10px] font-bold transition-colors select-none">i</span>
+      <div className="absolute left-0 top-full mt-2 w-80 bg-white border border-gray-200 text-gray-600 text-xs rounded-xl px-4 py-3 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 leading-relaxed">
+        <div className="absolute left-4 bottom-full w-0 h-0 border-x-4 border-x-transparent border-b-4 border-b-gray-200" />
+        <div className="absolute left-4 bottom-full mb-[-1px] w-0 h-0 border-x-4 border-x-transparent border-b-4 border-b-white" />
+        <p className="font-semibold text-gray-800 mb-1.5">How country is determined</p>
+        <p>{text}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -318,13 +332,16 @@ export default function Dashboard() {
 
         {/* Affiliate x Country breakdown */}
         {data.affiliateCountries.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 mb-8 overflow-hidden">
+          <div className="bg-white rounded-xl border border-gray-200 mb-8">
             <div
               className="px-5 py-4 border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50"
               onClick={() => setAffiliateCountriesExpanded(v => !v)}
             >
               <div>
-                <h2 className="text-sm font-semibold text-gray-700">Conversions by Affiliate & Country</h2>
+                <div className="flex items-center">
+                  <h2 className="text-sm font-semibold text-gray-700">Conversions by Affiliate & Country</h2>
+                  <InfoTooltip text="Country is sourced from PostHog, not Rewardful. Each conversion's customer email (from Rewardful) is matched to a PostHog user via their sign_up event, then the country is taken from that user's $pageview geo data ($geoip_country_code). Conversions without a matching email or pageview show no country." />
+                </div>
                 <p className="text-xs text-gray-400 mt-0.5">Click an affiliate row to expand their country breakdown</p>
               </div>
               <span className="text-gray-400 text-sm">{affiliateCountriesExpanded ? '▲ Collapse' : '▼ Show all'}</span>
@@ -609,10 +626,13 @@ export default function Dashboard() {
 
         {/* Country breakdown */}
         {data.countriesByConversions.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 mb-8 overflow-hidden">
+          <div className="bg-white rounded-xl border border-gray-200 mb-8">
             <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-gray-700">Conversions by Country</h2>
+                <div className="flex items-center">
+                  <h2 className="text-sm font-semibold text-gray-700">Conversions by Country</h2>
+                  <InfoTooltip text="Country is sourced from PostHog, not Rewardful. Each conversion's customer email (from Rewardful) is matched to a PostHog user via their sign_up event, then the country is taken from that user's $pageview geo data ($geoip_country_code). Conversions without a matching email or pageview show no country." />
+                </div>
                 <p className="text-xs text-gray-400 mt-0.5">Top 10 countries by total conversions</p>
               </div>
               <div className="flex gap-2">

@@ -38,6 +38,9 @@ npm run build        # Production build
 npm run migrate      # Create/update database tables (safe to re-run)
 npm run backfill     # Backfill historical data from Rewardful API
 npm run lint         # Run ESLint
+
+# Run scripts directly (they load .env.local automatically):
+npx tsx scripts/backfill-customer-emails.ts   # Re-enrich country data from PostHog
 ```
 
 ## Architecture
