@@ -59,6 +59,9 @@ async function migrate() {
 
   await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS link_id TEXT`;
   await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS link_token TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS country_code TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS country_name TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS customer_email TEXT`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS sales (

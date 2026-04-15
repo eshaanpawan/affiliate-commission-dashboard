@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
+import { getConversionCountriesByEmail } from '@/lib/posthog';
 
 const sql = neon(process.env.NEON_DATABASE_URL!);
 const API_SECRET = process.env.REWARDFUL_API_SECRET!;
@@ -95,6 +96,7 @@ export async function POST() {
     // Sync referrals (last 48h)
     const referrals = await fetchRecent('/referrals', cutoff);
     if (referrals.length > 0) {
+      const converted = referrals.find(r => r.conversion_state === 'conversion');
       for (const batch of chunks(referrals, 100)) {
         const rows = batch.map((r) => {
           const linkId = (r.link as { id: string } | null)?.id ?? null;
@@ -102,22 +104,53 @@ export async function POST() {
           const isConversion = r.conversion_state === 'conversion';
           const isLead = r.conversion_state === 'lead';
           const status = isConversion ? 'converted' : isLead ? 'lead' : 'visitor';
+          const customerEmail = (r.customer as { email?: string } | null)?.email ?? null;
           return [r.id, affiliateId, linkId, (r.link as { token: string } | null)?.token ?? null,
-            status, r.created_at ?? null, r.became_conversion_at ?? null];
+            status, r.created_at ?? null, r.became_conversion_at ?? null, customerEmail];
         });
         await sql`
-          INSERT INTO referrals (rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at)
+          INSERT INTO referrals (rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at, customer_email)
           SELECT * FROM unnest(
             ${rows.map(r => r[0])}::text[], ${rows.map(r => r[1])}::text[],
             ${rows.map(r => r[2])}::text[], ${rows.map(r => r[3])}::text[],
             ${rows.map(r => r[4])}::text[], ${rows.map(r => r[5])}::timestamptz[],
-            ${rows.map(r => r[6])}::timestamptz[]
-          ) AS t(rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at)
+            ${rows.map(r => r[6])}::timestamptz[], ${rows.map(r => r[7])}::text[]
+          ) AS t(rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at, customer_email)
           ON CONFLICT (rewardful_id) DO UPDATE SET
             status = EXCLUDED.status, affiliate_id = COALESCE(EXCLUDED.affiliate_id, referrals.affiliate_id),
-            converted_at = COALESCE(EXCLUDED.converted_at, referrals.converted_at)
+            converted_at = COALESCE(EXCLUDED.converted_at, referrals.converted_at),
+            customer_email = COALESCE(EXCLUDED.customer_email, referrals.customer_email)
         `;
       }
+    }
+
+    // Enrich converted referrals with country data from PostHog
+    let countriesEnriched = 0;
+    try {
+      const countryMap = await getConversionCountriesByEmail();
+      if (countryMap.size > 0) {
+        const toEnrich = await sql`
+          SELECT rewardful_id, customer_email
+          FROM referrals
+          WHERE status = 'converted'
+            AND country_code IS NULL
+            AND customer_email IS NOT NULL
+        `;
+        for (const row of toEnrich) {
+          const email = (row.customer_email as string).toLowerCase();
+          const country = countryMap.get(email);
+          if (country) {
+            await sql`
+              UPDATE referrals
+              SET country_code = ${country.country_code}, country_name = ${country.country_name}
+              WHERE rewardful_id = ${row.rewardful_id as string}
+            `;
+            countriesEnriched++;
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[sync] Country enrichment failed (non-fatal):', err);
     }
 
     // Sync sales (last 48h)
@@ -214,7 +247,7 @@ export async function POST() {
     }
 
     return NextResponse.json({
-      synced: { affiliates: affiliates.length, referrals: referrals.length, sales: sales.length, commissions: commissions.length, commissionStatsUpdated },
+      synced: { affiliates: affiliates.length, referrals: referrals.length, sales: sales.length, commissions: commissions.length, commissionStatsUpdated, countriesEnriched },
       syncedAt: new Date().toISOString(),
     });
   } catch (err) {

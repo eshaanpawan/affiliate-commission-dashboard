@@ -1,7 +1,13 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, NextRequest } from 'next/server';
 import sql from '@/lib/db';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const period = req.nextUrl.searchParams.get('period') ?? 'all';
+  const intervalMap: Record<string, string> = { '7d': '7 days', '30d': '30 days', '90d': '90 days' };
+  const interval = intervalMap[period];
+  // dateFilter is applied to time-sensitive overview queries when a period is selected
+  const cutoff = interval ? new Date(Date.now() - (period === '7d' ? 7 : period === '30d' ? 30 : 90) * 86400000).toISOString() : null;
+
   const [
     affiliateStats,
     referralStats,
@@ -20,16 +26,30 @@ export async function GET() {
     monthlyReferrals,
     monthlyRevenue,
     monthlyCommissions,
+    countriesByConversions,
+    affiliateCountryRows,
   ] = await Promise.all([
     // Overview: affiliate counts
-    sql`
+    cutoff ? sql`
+      SELECT
+        COUNT(*) AS total,
+        COUNT(CASE WHEN status != 'inactive' AND status != 'deleted' THEN 1 END) AS active
+      FROM affiliates
+      WHERE created_at >= ${cutoff}
+    ` : sql`
       SELECT
         COUNT(*) AS total,
         COUNT(CASE WHEN status != 'inactive' AND status != 'deleted' THEN 1 END) AS active
       FROM affiliates
     `,
     // Overview: referral counts
-    sql`
+    cutoff ? sql`
+      SELECT
+        COUNT(*) AS total,
+        COUNT(CASE WHEN status = 'converted' THEN 1 END) AS converted
+      FROM referrals
+      WHERE status != 'deleted' AND created_at >= ${cutoff}
+    ` : sql`
       SELECT
         COUNT(*) AS total,
         COUNT(CASE WHEN status = 'converted' THEN 1 END) AS converted
@@ -37,14 +57,23 @@ export async function GET() {
       WHERE status != 'deleted'
     `,
     // Overview: revenue
-    sql`
-      SELECT
-        COALESCE(SUM(amount_cents), 0) AS total_cents
+    cutoff ? sql`
+      SELECT COALESCE(SUM(amount_cents), 0) AS total_cents
+      FROM sales
+      WHERE status = 'created' AND created_at >= ${cutoff}
+    ` : sql`
+      SELECT COALESCE(SUM(amount_cents), 0) AS total_cents
       FROM sales
       WHERE status = 'created'
     `,
-    // Overview: commissions
-    sql`
+    // Overview: commissions (unpaid_commission_cents is current state, not time-filterable; use commissions table for period)
+    cutoff ? sql`
+      SELECT
+        COALESCE(SUM(amount_cents), 0) AS total_cents,
+        COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_cents ELSE 0 END), 0) AS paid_cents
+      FROM commissions
+      WHERE status NOT IN ('deleted', 'voided') AND created_at >= ${cutoff}
+    ` : sql`
       SELECT
         COALESCE(SUM(unpaid_commission_cents + paid_commission_cents), 0) AS total_cents,
         COALESCE(SUM(paid_commission_cents), 0) AS paid_cents
@@ -210,6 +239,36 @@ export async function GET() {
       GROUP BY DATE_TRUNC('month', created_at)
       ORDER BY month
     `,
+    // Countries by conversions
+    sql`
+      SELECT
+        country_name,
+        country_code,
+        COUNT(*) AS conversions
+      FROM referrals
+      WHERE status = 'converted'
+        AND country_code IS NOT NULL
+      GROUP BY country_name, country_code
+      ORDER BY conversions DESC
+      LIMIT 20
+    `,
+    // Affiliate x country breakdown
+    sql`
+      SELECT
+        a.rewardful_id AS affiliate_id,
+        a.first_name,
+        a.last_name,
+        a.email,
+        r.country_code,
+        r.country_name,
+        COUNT(*) AS conversions
+      FROM referrals r
+      JOIN affiliates a ON a.rewardful_id = r.affiliate_id
+      WHERE r.status = 'converted'
+        AND r.country_code IS NOT NULL
+      GROUP BY a.rewardful_id, a.first_name, a.last_name, a.email, r.country_code, r.country_name
+      ORDER BY a.email, conversions DESC
+    `,
   ]);
 
   // Merge monthly data by month key
@@ -291,5 +350,30 @@ export async function GET() {
       name: [a.first_name, a.last_name].filter(Boolean).join(' ') || a.email,
       value: Number(a.conversions),
     })),
+    countriesByConversions: countriesByConversions.map((r) => ({
+      country_code: r.country_code as string,
+      country_name: r.country_name as string,
+      conversions: Number(r.conversions),
+    })),
+    affiliateCountries: (() => {
+      const map = new Map<string, { affiliate_id: string; name: string; email: string; total: number; countries: { country_code: string; country_name: string; conversions: number }[] }>();
+      for (const r of affiliateCountryRows) {
+        const key = r.affiliate_id as string;
+        if (!map.has(key)) {
+          map.set(key, {
+            affiliate_id: key,
+            name: [r.first_name, r.last_name].filter(Boolean).join(' ') || r.email as string,
+            email: r.email as string,
+            total: 0,
+            countries: [],
+          });
+        }
+        const entry = map.get(key)!;
+        const count = Number(r.conversions);
+        entry.total += count;
+        entry.countries.push({ country_code: r.country_code as string, country_name: r.country_name as string, conversions: count });
+      }
+      return Array.from(map.values()).sort((a, b) => b.total - a.total);
+    })(),
   });
 }

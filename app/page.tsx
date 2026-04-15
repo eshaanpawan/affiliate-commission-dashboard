@@ -58,6 +58,8 @@ interface DashboardData {
   topByReferrals: { name: string; value: number }[];
   topByConversions: { name: string; value: number }[];
   weeklyLeaderboard: { rank: number; name: string; email: string; conversionsThisWeek: number; referralsThisWeek: number }[];
+  countriesByConversions: { country_code: string; country_name: string; conversions: number }[];
+  affiliateCountries: { affiliate_id: string; name: string; email: string; total: number; countries: { country_code: string; country_name: string; conversions: number }[] }[];
 }
 
 interface AffiliateDetail {
@@ -156,10 +158,20 @@ export default function Dashboard() {
   const [sortKey, setSortKey] = useState<SortKey>('conversions');
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
   const [selectedAffiliate, setSelectedAffiliate] = useState<Affiliate | null>(null);
+  const [period, setPeriod] = useState<'7d' | '30d' | '90d' | 'all'>('all');
+  const [affiliatesExpanded, setAffiliatesExpanded] = useState(false);
+  const [monthlyExpanded, setMonthlyExpanded] = useState(false);
+  const [topAffiliatesExpanded, setTopAffiliatesExpanded] = useState(false);
+  const [last30Expanded, setLast30Expanded] = useState(true);
+  const [leaderboardExpanded, setLeaderboardExpanded] = useState(false);
+  const [countryView, setCountryView] = useState<'chart' | 'table'>('chart');
+  const [affiliateCountriesExpanded, setAffiliateCountriesExpanded] = useState(false);
+  const [expandedAffiliateCountries, setExpandedAffiliateCountries] = useState<Set<string>>(new Set());
+  const [affiliateCountryView, setAffiliateCountryView] = useState<Record<string, 'chart' | 'table'>>({});
 
-  async function load() {
+  async function load(p?: string) {
     try {
-      const res = await fetch('/api/dashboard');
+      const res = await fetch(`/api/dashboard?period=${p ?? period}`);
       const json = await res.json();
       setData(json);
       setLastUpdated(new Date());
@@ -185,7 +197,8 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    sync();
+    load();                          // show DB data immediately
+    sync();                          // sync with Rewardful in background
     const dashInterval = setInterval(load, 30000);
     const syncInterval = setInterval(sync, 3 * 60 * 1000);
     return () => { clearInterval(dashInterval); clearInterval(syncInterval); };
@@ -240,40 +253,180 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Top metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          <MetricCard label="Total Affiliates" value={overview.totalAffiliates} sub={`${overview.activeAffiliates} active`} />
-          <MetricCard label="Total Referrals" value={overview.totalReferrals} sub={`${overview.convertedReferrals} converted (${pct(overview.convertedReferrals, overview.totalReferrals)})`} />
-          <MetricCard label="Total Revenue" value={fmt(overview.totalRevenueCents)} />
-          <MetricCard label="Commissions Owed" value={fmt(overview.totalCommissionCents)} sub={`${fmt(overview.paidCommissionCents)} paid`} />
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          <MetricCard label="Conversion Rate" value={pct(overview.convertedReferrals, overview.totalReferrals)} />
-          <MetricCard label="Unpaid Commissions" value={fmt(overview.totalCommissionCents - overview.paidCommissionCents)} />
-          <MetricCard label="Pending Payouts" value={fmt(overview.pendingPayoutCents)} />
-          <MetricCard label="Avg Revenue / Affiliate" value={overview.totalAffiliates > 0 ? fmt(overview.totalRevenueCents / overview.totalAffiliates) : '$0.00'} />
+        {/* Period-filtered metrics */}
+        <div className="bg-white rounded-xl border border-indigo-100 mb-8 p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-700">Overview</h2>
+              <p className="text-xs text-gray-400 mt-0.5">Metrics update based on the selected time window</p>
+            </div>
+            <div className="flex gap-2">
+              {(['7d', '30d', '90d', 'all'] as const).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => { setPeriod(p); load(p); }}
+                  className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${period === p ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                >
+                  {p === '7d' ? 'Last 7 days' : p === '30d' ? 'Last 30 days' : p === '90d' ? 'Last 90 days' : 'All time'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <MetricCard label="Total Affiliates" value={overview.totalAffiliates} sub={`${overview.activeAffiliates} active`} />
+            <MetricCard label="Total Referrals" value={overview.totalReferrals} sub={`${overview.convertedReferrals} converted (${pct(overview.convertedReferrals, overview.totalReferrals)})`} />
+            <MetricCard label="Total Revenue" value={fmt(overview.totalRevenueCents)} />
+            <MetricCard label="Commissions Owed" value={fmt(overview.totalCommissionCents)} sub={`${fmt(overview.paidCommissionCents)} paid`} />
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <MetricCard label="Conversion Rate" value={pct(overview.convertedReferrals, overview.totalReferrals)} sub={`${overview.convertedReferrals} conversions`} />
+            <MetricCard label="Unpaid Commissions" value={fmt(overview.totalCommissionCents - overview.paidCommissionCents)} />
+            <MetricCard label="Pending Payouts" value={fmt(overview.pendingPayoutCents)} />
+            <MetricCard label="Avg Revenue / Affiliate" value={overview.totalAffiliates > 0 ? fmt(overview.totalRevenueCents / overview.totalAffiliates) : '$0.00'} />
+          </div>
         </div>
 
         {/* Day-on-day charts */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-          <DayOnDayChart title="New Affiliates (last 30 days)" data={charts.dailyAffiliates} bars={[{ key: 'count', color: '#6366f1', label: 'New affiliates' }]} />
-          <DayOnDayChart
-            title="Referrals & Conversions per Day (last 30 days)"
-            data={charts.dailyReferrals}
-            bars={[
-              { key: 'total', color: '#94a3b8', label: 'Referrals', axis: 'left' },
-              { key: 'converted', color: '#22c55e', label: 'Conversions', axis: 'right' },
-            ]}
-          />
-          <DayOnDayChart title="Revenue per Day (last 30 days)" data={charts.dailyRevenue} bars={[{ key: 'usd', color: '#6366f1', label: 'Revenue' }]} valuePrefix="$" />
-          <DayOnDayChart title="Commissions per Day (last 30 days)" data={charts.dailyCommissions} bars={[{ key: 'usd', color: '#f59e0b', label: 'Commissions' }]} valuePrefix="$" />
+        <div className="bg-white rounded-xl border border-gray-200 mb-8 overflow-hidden">
+          <div
+            className="px-5 py-4 border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+            onClick={() => setLast30Expanded(v => !v)}
+          >
+            <div>
+              <h2 className="text-sm font-semibold text-gray-700">Last 30 Days</h2>
+              <p className="text-xs text-gray-400 mt-0.5">Daily trends for affiliates, referrals, revenue and commissions</p>
+            </div>
+            <span className="text-gray-400 text-sm">{last30Expanded ? '▲ Collapse' : '▼ Show all'}</span>
+          </div>
+          {last30Expanded && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-5">
+              <DayOnDayChart title="New Affiliates (last 30 days)" data={charts.dailyAffiliates} bars={[{ key: 'count', color: '#6366f1', label: 'New affiliates' }]} />
+              <DayOnDayChart
+                title="Referrals & Conversions per Day (last 30 days)"
+                data={charts.dailyReferrals}
+                bars={[
+                  { key: 'total', color: '#94a3b8', label: 'Referrals', axis: 'left' },
+                  { key: 'converted', color: '#22c55e', label: 'Conversions', axis: 'right' },
+                ]}
+              />
+              <DayOnDayChart title="Revenue per Day (last 30 days)" data={charts.dailyRevenue} bars={[{ key: 'usd', color: '#6366f1', label: 'Revenue' }]} valuePrefix="$" />
+              <DayOnDayChart title="Commissions per Day (last 30 days)" data={charts.dailyCommissions} bars={[{ key: 'usd', color: '#f59e0b', label: 'Commissions' }]} valuePrefix="$" />
+            </div>
+          )}
         </div>
+
+
+        {/* Affiliate x Country breakdown */}
+        {data.affiliateCountries.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 mb-8 overflow-hidden">
+            <div
+              className="px-5 py-4 border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+              onClick={() => setAffiliateCountriesExpanded(v => !v)}
+            >
+              <div>
+                <h2 className="text-sm font-semibold text-gray-700">Conversions by Affiliate & Country</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Click an affiliate row to expand their country breakdown</p>
+              </div>
+              <span className="text-gray-400 text-sm">{affiliateCountriesExpanded ? '▲ Collapse' : '▼ Show all'}</span>
+            </div>
+            {!affiliateCountriesExpanded ? null : <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-gray-500 border-b border-gray-100">
+                  <th className="text-left px-5 py-3 font-medium">Affiliate</th>
+                  <th className="text-right px-5 py-3 font-medium">Conversions with Country</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.affiliateCountries.map((a) => {
+                  const isExpanded = expandedAffiliateCountries.has(a.affiliate_id);
+                  const view = affiliateCountryView[a.affiliate_id] ?? 'chart';
+                  return (
+                    <>
+                      <tr
+                        key={a.affiliate_id}
+                        className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
+                        onClick={() => setExpandedAffiliateCountries(prev => {
+                          const next = new Set(prev);
+                          next.has(a.affiliate_id) ? next.delete(a.affiliate_id) : next.add(a.affiliate_id);
+                          return next;
+                        })}
+                      >
+                        <td className="px-5 py-3">
+                          <p className="font-medium text-gray-900">{a.name}</p>
+                          <p className="text-xs text-gray-400">{a.email}</p>
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          <span className="font-semibold text-gray-900">{a.total}</span>
+                          <span className="ml-2 text-gray-400 text-xs">{isExpanded ? '▲' : '▼'}</span>
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr key={`${a.affiliate_id}-expanded`} className="border-b border-gray-100 bg-gray-50">
+                          <td colSpan={2} className="px-5 py-4">
+                            {/* Toggle */}
+                            <div className="flex items-center gap-2 mb-4">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setAffiliateCountryView(v => ({ ...v, [a.affiliate_id]: 'chart' })); }}
+                                className={`px-3 py-1 rounded text-xs font-medium ${view === 'chart' ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                              >Chart</button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setAffiliateCountryView(v => ({ ...v, [a.affiliate_id]: 'table' })); }}
+                                className={`px-3 py-1 rounded text-xs font-medium ${view === 'table' ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+                              >Table</button>
+                            </div>
+                            {view === 'chart' ? (
+                              <ResponsiveContainer width="100%" height={220}>
+                                <BarChart data={a.countries} margin={{ top: 0, right: 16, left: 0, bottom: 60 }}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                                  <XAxis dataKey="country_name" tick={{ fontSize: 11 }} interval={0} angle={-30} textAnchor="end" />
+                                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                                  <Tooltip formatter={(v) => [`${v} conversions`, 'Conversions']} />
+                                  <Bar dataKey="conversions" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                                </BarChart>
+                              </ResponsiveContainer>
+                            ) : (
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="text-xs text-gray-500 border-b border-gray-200">
+                                    <th className="text-left py-2 font-medium">Country</th>
+                                    <th className="text-right py-2 font-medium">Conversions</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {a.countries.map(c => (
+                                    <tr key={c.country_code} className="border-b border-gray-100">
+                                      <td className="py-2 text-gray-700">{c.country_name}</td>
+                                      <td className="py-2 text-right font-semibold text-indigo-600">{c.conversions}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  );
+                })}
+              </tbody>
+            </table>}
+          </div>
+        )}
 
         {/* Month-on-Month */}
         {data.monthly.length > 0 && (
-          <div className="mb-8">
-            <h2 className="text-sm font-semibold text-gray-700 mb-4">Month-on-Month</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div className="bg-white rounded-xl border border-gray-200 mb-8 overflow-hidden">
+            <div
+              className="px-5 py-4 border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+              onClick={() => setMonthlyExpanded(v => !v)}
+            >
+              <div>
+                <h2 className="text-sm font-semibold text-gray-700">Month-on-Month</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Monthly referrals, conversions, revenue and commissions</p>
+              </div>
+              <span className="text-gray-400 text-sm">{monthlyExpanded ? '▲ Collapse' : '▼ Show all'}</span>
+            </div>
+            {monthlyExpanded && <><div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-5">
               <div className="bg-white rounded-xl border border-gray-200 p-5">
                 <p className="text-sm font-semibold text-gray-700 mb-4">Conversions per Month</p>
                 <ResponsiveContainer width="100%" height={180}>
@@ -330,26 +483,44 @@ export default function Dashboard() {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </div></>}
           </div>
         )}
 
-        {/* Pie charts */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-          <TopAffiliatesPie title="Top Affiliates by Referrals" data={data.topByReferrals} label="referrals" />
-          <TopAffiliatesPie title="Top Affiliates by Conversions" data={data.topByConversions} label="conversions" />
+
+        {/* Top Affiliates */}
+        <div className="bg-white rounded-xl border border-gray-200 mb-8 overflow-hidden">
+          <div
+            className="px-5 py-4 border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+            onClick={() => setTopAffiliatesExpanded(v => !v)}
+          >
+            <div>
+              <h2 className="text-sm font-semibold text-gray-700">Top Affiliates</h2>
+              <p className="text-xs text-gray-400 mt-0.5">By referrals and by conversions</p>
+            </div>
+            <span className="text-gray-400 text-sm">{topAffiliatesExpanded ? '▲ Collapse' : '▼ Show all'}</span>
+          </div>
+          {topAffiliatesExpanded && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-5">
+              <TopAffiliatesPie title="Top Affiliates by Referrals" data={data.topByReferrals} label="referrals" />
+              <TopAffiliatesPie title="Top Affiliates by Conversions" data={data.topByConversions} label="conversions" />
+            </div>
+          )}
         </div>
 
         {/* Weekly leaderboard */}
         <div className="bg-white rounded-xl border border-gray-200 mb-8 overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div
+            className="px-5 py-4 border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+            onClick={() => setLeaderboardExpanded(v => !v)}
+          >
             <div>
               <h2 className="text-sm font-semibold text-gray-700">Weekly Leaderboard</h2>
               <p className="text-xs text-gray-400 mt-0.5">Top affiliates by conversions this week (Mon–Sun)</p>
             </div>
-            <span className="text-xs bg-indigo-50 text-indigo-600 px-2 py-1 rounded font-medium">This Week</span>
+            <span className="text-gray-400 text-sm">{leaderboardExpanded ? '▲ Collapse' : '▼ Show all'}</span>
           </div>
-          {data.weeklyLeaderboard.length === 0 ? (
+          {leaderboardExpanded && (data.weeklyLeaderboard.length === 0 ? (
             <div className="p-8 text-center text-gray-400 text-sm">No conversions this week yet.</div>
           ) : (
             <table className="w-full text-sm">
@@ -381,16 +552,19 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
-          )}
+          ))}
         </div>
 
         {/* Affiliates table */}
         <div className="bg-white rounded-xl border border-gray-200 mb-8 overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="text-sm font-semibold text-gray-700">Affiliates</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Click any row to see growth details</p>
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between cursor-pointer select-none" onClick={() => setAffiliatesExpanded(e => !e)}>
+            <div>
+              <h2 className="text-sm font-semibold text-gray-700">Affiliates</h2>
+              <p className="text-xs text-gray-400 mt-0.5">Click any row to see growth details</p>
+            </div>
+            <span className="text-gray-400 text-sm">{affiliatesExpanded ? '▲ Collapse' : '▼ Show all'}</span>
           </div>
-          {affiliates.length === 0 ? (
+          {!affiliatesExpanded ? null : affiliates.length === 0 ? (
             <div className="p-8 text-center text-gray-400 text-sm">No affiliates yet.</div>
           ) : (
             <div className="overflow-x-auto">
@@ -432,6 +606,52 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
+        {/* Country breakdown */}
+        {data.countriesByConversions.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 mb-8 overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-700">Conversions by Country</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Top 10 countries by total conversions</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setCountryView('chart')} className={`px-3 py-1 rounded text-xs font-medium ${countryView === 'chart' ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}>Chart</button>
+                <button onClick={() => setCountryView('table')} className={`px-3 py-1 rounded text-xs font-medium ${countryView === 'table' ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-50'}`}>Table</button>
+              </div>
+            </div>
+            <div className="p-5">
+              {countryView === 'chart' ? (
+                <ResponsiveContainer width="100%" height={260}>
+                  <BarChart data={data.countriesByConversions.slice(0, 10)} margin={{ top: 0, right: 16, left: 0, bottom: 60 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+                    <XAxis dataKey="country_name" tick={{ fontSize: 11 }} interval={0} angle={-30} textAnchor="end" />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <Tooltip formatter={(v) => [`${v} conversions`, 'Conversions']} />
+                    <Bar dataKey="conversions" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-gray-500 border-b border-gray-200">
+                      <th className="text-left py-2 font-medium">Country</th>
+                      <th className="text-right py-2 font-medium">Conversions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.countriesByConversions.map(r => (
+                      <tr key={r.country_code} className="border-b border-gray-100">
+                        <td className="py-2 text-gray-700">{r.country_name}</td>
+                        <td className="py-2 text-right font-semibold text-indigo-600">{r.conversions}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Recent activity */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
