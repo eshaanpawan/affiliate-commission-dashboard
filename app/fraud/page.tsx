@@ -1,0 +1,557 @@
+'use client';
+
+import { useEffect, useState, useMemo } from 'react';
+import Link from 'next/link';
+
+interface RiskSignal {
+  key: string;
+  label: string;
+  severity: 'low' | 'medium' | 'high';
+  value: number | string;
+  detail: string;
+}
+
+interface AffiliateRisk {
+  score: number;
+  band: 'low' | 'medium' | 'high';
+  signals: RiskSignal[];
+  stats: {
+    referrals: number;
+    conversions: number;
+    convRate: number;
+    instantConvPct: number;
+    gclidPct: number;
+    googleReferrerPct: number;
+    paidUtmPct: number;
+    fbclidPct: number;
+    topSourcePct: number;
+    topSource: string | null;
+    medianTimeToConvSec: number | null;
+  };
+}
+
+interface FraudAffiliate {
+  id: string;
+  name: string;
+  email: string | null;
+  status: string;
+  reviewStatus: 'unreviewed' | 'flagged' | 'cleared' | 'paused';
+  reviewNotes: string | null;
+  knownUrl: string | null;
+  unpaidCommissionCents: number;
+  paidCommissionCents: number;
+  referrals: number;
+  conversions: number;
+  risk: AffiliateRisk;
+}
+
+interface FraudListResponse {
+  summary: {
+    totalReviewed: number;
+    highRisk: number;
+    mediumRisk: number;
+    lowRisk: number;
+    flagged: number;
+    cleared: number;
+    unpaidAtRiskCents: number;
+  };
+  affiliates: FraudAffiliate[];
+}
+
+interface ReferralDetail {
+  id: string;
+  status: string;
+  createdAt: string;
+  convertedAt: string | null;
+  customerEmail: string | null;
+  referrer: string | null;
+  landingPage: string | null;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  gclid: string | null;
+  fbclid: string | null;
+  ttcSeconds: number | null;
+  flags: string[];
+}
+
+interface FraudDetail {
+  affiliate: FraudAffiliate;
+  risk: AffiliateRisk;
+  linkTokens: string[];
+  topReferrers: { host: string; count: number }[];
+  topLandings: { path: string; count: number }[];
+  referrals: ReferralDetail[];
+}
+
+function fmt(cents: number) {
+  return '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatTtc(sec: number | null): string {
+  if (sec === null) return '—';
+  if (sec < 60) return `${Math.round(sec)}s`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  if (sec < 86400) return `${Math.round(sec / 3600)}h`;
+  return `${Math.round(sec / 86400)}d`;
+}
+
+function bandColor(band: string) {
+  return band === 'high' ? 'bg-red-100 text-red-700 border-red-200'
+    : band === 'medium' ? 'bg-amber-100 text-amber-700 border-amber-200'
+    : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+}
+
+function reviewBadgeColor(status: string) {
+  return status === 'flagged' ? 'bg-red-100 text-red-700'
+    : status === 'cleared' ? 'bg-emerald-100 text-emerald-700'
+    : status === 'paused' ? 'bg-gray-200 text-gray-700'
+    : 'bg-gray-100 text-gray-500';
+}
+
+function severityDot(sev: string) {
+  return sev === 'high' ? 'bg-red-500' : sev === 'medium' ? 'bg-amber-500' : 'bg-gray-300';
+}
+
+function googleBrandCheckUrl(name: string) {
+  return `https://www.google.com/search?q=${encodeURIComponent(`runable ${name}`)}`;
+}
+
+function googleSiteSearchUrl(name: string) {
+  return `https://www.google.com/search?q=${encodeURIComponent(`"${name}" runable affiliate`)}`;
+}
+
+function FraudModal({ affiliate, onClose, onReviewUpdate }: {
+  affiliate: FraudAffiliate;
+  onClose: () => void;
+  onReviewUpdate: (id: string, patch: Partial<FraudAffiliate>) => void;
+}) {
+  const [detail, setDetail] = useState<FraudDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [notes, setNotes] = useState(affiliate.reviewNotes ?? '');
+  const [knownUrl, setKnownUrl] = useState(affiliate.knownUrl ?? '');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/fraud/${affiliate.id}`)
+      .then(r => r.json())
+      .then(d => { setDetail(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [affiliate.id]);
+
+  async function setStatus(reviewStatus: 'flagged' | 'cleared' | 'paused' | 'unreviewed') {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/affiliates/${affiliate.id}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewStatus, reviewNotes: notes, knownUrl }),
+      });
+      const json = await res.json();
+      if (json.ok) onReviewUpdate(affiliate.id, { reviewStatus, reviewNotes: notes, knownUrl });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl mx-4 p-6 overflow-y-auto max-h-[92vh]" onClick={(e) => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              <h2 className="text-lg font-bold text-gray-900">{affiliate.name}</h2>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${bandColor(affiliate.risk.band)}`}>
+                Risk {affiliate.risk.score} · {affiliate.risk.band.toUpperCase()}
+              </span>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${reviewBadgeColor(affiliate.reviewStatus)}`}>
+                {affiliate.reviewStatus}
+              </span>
+            </div>
+            <p className="text-sm text-gray-400">{affiliate.email}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
+        </div>
+
+        {/* Quick action investigation links */}
+        <div className="flex flex-wrap gap-2 mb-5">
+          <a href={googleBrandCheckUrl(affiliate.name)} target="_blank" rel="noreferrer"
+             className="text-xs px-2.5 py-1.5 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium">
+            🔍 Google "runable {affiliate.name}"
+          </a>
+          <a href={googleSiteSearchUrl(affiliate.name)} target="_blank" rel="noreferrer"
+             className="text-xs px-2.5 py-1.5 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium">
+            🔍 Find affiliate page
+          </a>
+          {affiliate.email && (
+            <a href={`https://www.google.com/search?q=${encodeURIComponent(affiliate.email.split('@')[0])}`}
+               target="_blank" rel="noreferrer"
+               className="text-xs px-2.5 py-1.5 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium">
+              🔍 Search by handle
+            </a>
+          )}
+          {detail?.linkTokens.slice(0, 2).map((token) => (
+            <a key={token} href={`https://runable.com/?via=${token}`} target="_blank" rel="noreferrer"
+               className="text-xs px-2.5 py-1.5 rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 font-mono">
+              ↗ ?via={token}
+            </a>
+          ))}
+          {detail?.linkTokens[0] && (
+            <a href={`https://www.google.com/search?q=${encodeURIComponent(`"via=${detail.linkTokens[0]}"`)}`}
+               target="_blank" rel="noreferrer"
+               className="text-xs px-2.5 py-1.5 rounded-md bg-amber-50 text-amber-700 hover:bg-amber-100 font-medium">
+              🔍 Where they post links
+            </a>
+          )}
+        </div>
+
+        {/* Stats grid */}
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-3 mb-5">
+          <Stat label="Referrals" value={affiliate.referrals.toString()} />
+          <Stat label="Conversions" value={affiliate.conversions.toString()} />
+          <Stat label="Conv Rate" value={`${(affiliate.risk.stats.convRate * 100).toFixed(0)}%`}
+                tone={affiliate.risk.stats.convRate > 0.4 ? 'danger' : undefined} />
+          <Stat label="gclid %" value={`${(affiliate.risk.stats.gclidPct * 100).toFixed(0)}%`}
+                tone={affiliate.risk.stats.gclidPct > 0.15 ? 'danger' : undefined} />
+          <Stat label="Instant conv" value={`${(affiliate.risk.stats.instantConvPct * 100).toFixed(0)}%`}
+                tone={affiliate.risk.stats.instantConvPct > 0.4 ? 'danger' : undefined} />
+          <Stat label="Median TTC" value={formatTtc(affiliate.risk.stats.medianTimeToConvSec)} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-5">
+          <Stat label="Unpaid (at risk)" value={fmt(affiliate.unpaidCommissionCents)}
+                tone={affiliate.risk.band === 'high' ? 'danger' : undefined} />
+          <Stat label="Already paid" value={fmt(affiliate.paidCommissionCents)} />
+        </div>
+
+        {/* Signals */}
+        {affiliate.risk.signals.length === 0 ? (
+          <div className="text-sm text-gray-500 mb-5 p-3 bg-emerald-50 rounded-lg">
+            ✓ No fraud signals fired for this affiliate.
+          </div>
+        ) : (
+          <div className="mb-5">
+            <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Why this affiliate is flagged</h3>
+            <div className="space-y-2">
+              {affiliate.risk.signals.map((s) => (
+                <div key={s.key} className="flex items-start gap-2 p-3 bg-gray-50 rounded-lg">
+                  <span className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${severityDot(s.severity)}`} />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-gray-900">{s.label}</p>
+                      <span className="text-xs font-medium text-gray-500">{s.value}</span>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-0.5">{s.detail}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Top traffic sources */}
+        {loading ? (
+          <div className="h-20 flex items-center justify-center text-gray-400 text-sm">Loading detail...</div>
+        ) : detail && (
+          <>
+            {(detail.topReferrers.length > 0 || detail.topLandings.length > 0) && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+                {detail.topReferrers.length > 0 && (
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <p className="text-xs font-semibold uppercase text-gray-500 mb-2">Top referrers</p>
+                    <ul className="text-sm space-y-1">
+                      {detail.topReferrers.map((r) => (
+                        <li key={r.host} className="flex justify-between">
+                          <span className={r.host.includes('google') ? 'text-red-700 font-mono' : 'text-gray-700 font-mono'}>{r.host}</span>
+                          <span className="text-gray-500">{r.count}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {detail.topLandings.length > 0 && (
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <p className="text-xs font-semibold uppercase text-gray-500 mb-2">Top landing pages</p>
+                    <ul className="text-sm space-y-1">
+                      {detail.topLandings.map((r) => (
+                        <li key={r.path} className="flex justify-between gap-2">
+                          <span className="text-gray-700 font-mono truncate" title={r.path}>{r.path}</span>
+                          <span className="text-gray-500">{r.count}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Recent referrals table */}
+            {detail.referrals.length > 0 && (
+              <div className="mb-5">
+                <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Recent referrals ({detail.referrals.length})</h3>
+                <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">Created</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">Status</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">TTC</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">Source</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">Customer</th>
+                        <th className="text-left px-2 py-2 font-medium text-gray-500">Flags</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detail.referrals.map((r) => (
+                        <tr key={r.id} className="border-t border-gray-100">
+                          <td className="px-2 py-2 text-gray-600 whitespace-nowrap">{new Date(r.createdAt).toLocaleDateString()}</td>
+                          <td className="px-2 py-2">
+                            <span className={`px-1.5 py-0.5 rounded text-xs ${r.status === 'converted' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{r.status}</span>
+                          </td>
+                          <td className="px-2 py-2 text-gray-600">{r.ttcSeconds !== null && r.ttcSeconds < 300 ? <span className="text-red-600 font-semibold">{formatTtc(r.ttcSeconds)}</span> : formatTtc(r.ttcSeconds)}</td>
+                          <td className="px-2 py-2 text-gray-700 font-mono truncate max-w-[180px]" title={r.referrer ?? ''}>
+                            {r.utmSource ? `${r.utmSource}/${r.utmMedium ?? '?'}` : (r.referrer ? new URL(r.referrer).hostname.replace(/^www\./, '') : 'direct')}
+                          </td>
+                          <td className="px-2 py-2 text-gray-600 truncate max-w-[160px]" title={r.customerEmail ?? ''}>{r.customerEmail ?? '—'}</td>
+                          <td className="px-2 py-2">
+                            {r.flags.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {r.flags.map(f => (
+                                  <span key={f} className="px-1.5 py-0.5 rounded bg-red-50 text-red-700 text-[10px] font-mono">{f}</span>
+                                ))}
+                              </div>
+                            ) : <span className="text-gray-300">—</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Review controls */}
+        <div className="border-t border-gray-200 pt-4">
+          <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Manual review</h3>
+          <div className="mb-3">
+            <label className="text-xs text-gray-500 mb-1 block">Known affiliate URL (their site/channel/funnel)</label>
+            <input type="text" value={knownUrl} onChange={(e) => setKnownUrl(e.target.value)}
+                   placeholder="https://..."
+                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:border-indigo-400" />
+          </div>
+          <div className="mb-3">
+            <label className="text-xs text-gray-500 mb-1 block">Review notes</label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+                      placeholder="What did you find when you checked them?"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:border-indigo-400" />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button disabled={saving} onClick={() => setStatus('flagged')} className="px-3 py-1.5 text-xs font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">🚩 Flag as fraud</button>
+            <button disabled={saving} onClick={() => setStatus('paused')} className="px-3 py-1.5 text-xs font-medium rounded-md bg-gray-700 text-white hover:bg-gray-800 disabled:opacity-50">⏸ Pause</button>
+            <button disabled={saving} onClick={() => setStatus('cleared')} className="px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">✓ Cleared</button>
+            <button disabled={saving} onClick={() => setStatus('unreviewed')} className="px-3 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50">Reset</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: string; tone?: 'danger' }) {
+  return (
+    <div className={`rounded-lg p-3 ${tone === 'danger' ? 'bg-red-50' : 'bg-gray-50'}`}>
+      <p className="text-xs text-gray-500 mb-0.5">{label}</p>
+      <p className={`text-lg font-bold ${tone === 'danger' ? 'text-red-700' : 'text-gray-900'}`}>{value}</p>
+    </div>
+  );
+}
+
+type FilterKey = 'all' | 'high' | 'medium' | 'unreviewed' | 'flagged';
+
+export default function FraudPage() {
+  const [data, setData] = useState<FraudListResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<FilterKey>('high');
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<FraudAffiliate | null>(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/fraud');
+      const json = await res.json();
+      setData(json);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  const filtered = useMemo(() => {
+    if (!data) return [];
+    return data.affiliates.filter((a) => {
+      if (filter === 'high' && a.risk.band !== 'high') return false;
+      if (filter === 'medium' && a.risk.band !== 'medium') return false;
+      if (filter === 'unreviewed' && a.reviewStatus !== 'unreviewed') return false;
+      if (filter === 'flagged' && a.reviewStatus !== 'flagged') return false;
+      if (search) {
+        const q = search.toLowerCase();
+        if (!a.name.toLowerCase().includes(q) && !(a.email?.toLowerCase().includes(q))) return false;
+      }
+      return true;
+    });
+  }, [data, filter, search]);
+
+  function updateAffiliate(id: string, patch: Partial<FraudAffiliate>) {
+    if (!data) return;
+    setData({
+      ...data,
+      affiliates: data.affiliates.map((a) => a.id === id ? { ...a, ...patch } : a),
+    });
+    if (selected?.id === id) setSelected({ ...selected, ...patch });
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {selected && <FraudModal affiliate={selected} onClose={() => setSelected(null)} onReviewUpdate={updateAffiliate} />}
+
+      <div className="max-w-7xl mx-auto px-4 py-8">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              <Link href="/" className="text-sm text-indigo-500 hover:text-indigo-700">← Dashboard</Link>
+              <span className="text-gray-300">/</span>
+              <h1 className="text-2xl font-bold text-gray-900">Brand-Bidding & Fraud Audit</h1>
+            </div>
+            <p className="text-sm text-gray-400">Identify affiliates running brand-keyword ads, intercepting buyer-intent traffic, or otherwise faking referrals.</p>
+          </div>
+          <button onClick={load} disabled={loading} className="text-xs text-indigo-500 hover:text-indigo-700 disabled:opacity-40">
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
+
+        {/* Summary cards */}
+        {data && (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+              <p className="text-xs font-medium text-red-700">High risk</p>
+              <p className="text-2xl font-bold text-red-700 mt-1">{data.summary.highRisk}</p>
+              <p className="text-xs text-red-600/70 mt-0.5">{fmt(data.summary.unpaidAtRiskCents)} unpaid</p>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <p className="text-xs font-medium text-amber-700">Medium risk</p>
+              <p className="text-2xl font-bold text-amber-700 mt-1">{data.summary.mediumRisk}</p>
+            </div>
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <p className="text-xs font-medium text-gray-500">Low risk</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{data.summary.lowRisk}</p>
+            </div>
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <p className="text-xs font-medium text-gray-500">Flagged</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">🚩 {data.summary.flagged}</p>
+            </div>
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <p className="text-xs font-medium text-gray-500">Cleared</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">✓ {data.summary.cleared}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Filters */}
+        <div className="flex flex-wrap gap-2 items-center mb-4">
+          {(['high', 'medium', 'unreviewed', 'flagged', 'all'] as FilterKey[]).map((f) => (
+            <button key={f} onClick={() => setFilter(f)}
+                    className={`text-xs px-3 py-1.5 rounded-md font-medium ${filter === f ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
+              {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
+          <input type="text" placeholder="Search name or email…" value={search} onChange={(e) => setSearch(e.target.value)}
+                 className="ml-auto px-3 py-1.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-indigo-400 w-64" />
+        </div>
+
+        {/* Table */}
+        {loading ? (
+          <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400 text-sm">Loading affiliates…</div>
+        ) : !data || filtered.length === 0 ? (
+          <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400 text-sm">No affiliates match the current filter.</div>
+        ) : (
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-gray-500 border-b border-gray-100">
+                  <th className="text-left px-4 py-3 font-medium">Affiliate</th>
+                  <th className="text-right px-3 py-3 font-medium">Risk</th>
+                  <th className="text-left px-3 py-3 font-medium">Top signals</th>
+                  <th className="text-right px-3 py-3 font-medium">Refs</th>
+                  <th className="text-right px-3 py-3 font-medium">Conv %</th>
+                  <th className="text-right px-3 py-3 font-medium">gclid %</th>
+                  <th className="text-right px-3 py-3 font-medium">Instant %</th>
+                  <th className="text-right px-3 py-3 font-medium">Unpaid</th>
+                  <th className="text-right px-4 py-3 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((a) => (
+                  <tr key={a.id} className="border-b border-gray-50 hover:bg-indigo-50 transition-colors cursor-pointer" onClick={() => setSelected(a)}>
+                    <td className="px-4 py-3">
+                      <p className="font-medium text-gray-900">{a.name}</p>
+                      <p className="text-xs text-gray-400">{a.email}</p>
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold border ${bandColor(a.risk.band)}`}>{a.risk.score}</span>
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="flex flex-wrap gap-1 max-w-xs">
+                        {a.risk.signals.slice(0, 3).map(s => (
+                          <span key={s.key} className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-100 text-gray-700"
+                                title={s.detail}>
+                            {s.label}
+                          </span>
+                        ))}
+                        {a.risk.signals.length === 0 && <span className="text-xs text-gray-300">—</span>}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3 text-right text-gray-700">{a.referrals}</td>
+                    <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.convRate > 0.4 ? 'text-red-600' : 'text-gray-700'}`}>
+                      {(a.risk.stats.convRate * 100).toFixed(0)}%
+                    </td>
+                    <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.gclidPct > 0.15 ? 'text-red-600' : 'text-gray-400'}`}>
+                      {a.risk.stats.gclidPct > 0 ? `${(a.risk.stats.gclidPct * 100).toFixed(0)}%` : '—'}
+                    </td>
+                    <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.instantConvPct > 0.4 ? 'text-red-600' : 'text-gray-400'}`}>
+                      {a.risk.stats.instantConvPct > 0 ? `${(a.risk.stats.instantConvPct * 100).toFixed(0)}%` : '—'}
+                    </td>
+                    <td className="px-3 py-3 text-right font-medium text-amber-600">{fmt(a.unpaidCommissionCents)}</td>
+                    <td className="px-4 py-3 text-right">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${reviewBadgeColor(a.reviewStatus)}`}>{a.reviewStatus}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Methodology footnote */}
+        <div className="mt-6 text-xs text-gray-500 bg-white border border-gray-200 rounded-xl p-4">
+          <p className="font-medium text-gray-700 mb-1">How risk is scored</p>
+          <ul className="list-disc pl-5 space-y-1">
+            <li><b>gclid in referral URL</b> — visitor clicked a paid Google Ad before being attributed to the affiliate. Strongest brand-bidding signal.</li>
+            <li><b>utm_medium=cpc/ppc/paid</b> — affiliate is driving paid traffic, not the organic content they were approved for.</li>
+            <li><b>Google referrer concentration</b> — most/all referrals come from google.com. Real content affiliates have diversified sources.</li>
+            <li><b>Instant conversions (&lt;5 min)</b> — visitor clicked the affiliate link and signed up in seconds. They were already buyer-intent.</li>
+            <li><b>Abnormal conversion rate</b> — &gt;40% conv. rate is suspicious; content affiliates land at 5-20%.</li>
+            <li><b>"runable" in utm_term/utm_campaign</b> — the affiliate is literally bidding on our brand keyword.</li>
+          </ul>
+          <p className="mt-2 text-gray-500">If signals fire but the data feels wrong, click the affiliate, hit the Google search shortcuts in the modal, and manually verify before flagging.</p>
+        </div>
+      </div>
+    </div>
+  );
+}

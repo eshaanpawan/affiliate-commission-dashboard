@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
 import { getConversionCountriesByEmail } from '@/lib/posthog';
+import { extractTrafficFields } from '@/lib/fraud-detection';
 
 const sql = neon(process.env.NEON_DATABASE_URL!);
 const API_SECRET = process.env.REWARDFUL_API_SECRET!;
@@ -93,10 +94,9 @@ export async function POST() {
       }
     }
 
-    // Sync referrals (last 48h)
-    const referrals = await fetchRecent('/referrals', cutoff);
+    // Sync referrals (last 48h) — expand visits to capture referrer/UTM/gclid for fraud detection
+    const referrals = await fetchRecent('/referrals?expand[]=visits&expand[]=customer', cutoff);
     if (referrals.length > 0) {
-      const converted = referrals.find(r => r.conversion_state === 'conversion');
       for (const batch of chunks(referrals, 100)) {
         const rows = batch.map((r) => {
           const linkId = (r.link as { id: string } | null)?.id ?? null;
@@ -104,22 +104,62 @@ export async function POST() {
           const isConversion = r.conversion_state === 'conversion';
           const isLead = r.conversion_state === 'lead';
           const status = isConversion ? 'converted' : isLead ? 'lead' : 'visitor';
-          const customerEmail = (r.customer as { email?: string } | null)?.email ?? null;
-          return [r.id, affiliateId, linkId, (r.link as { token: string } | null)?.token ?? null,
-            status, r.created_at ?? null, r.became_conversion_at ?? null, customerEmail];
+          const t = extractTrafficFields(r);
+          return [
+            r.id, affiliateId, linkId, (r.link as { token: string } | null)?.token ?? null,
+            status, r.created_at ?? null, r.became_conversion_at ?? null,
+            t.became_lead_at, t.visitor_id, t.customer_email, t.customer_id,
+            t.referrer, t.landing_page,
+            t.utm_source, t.utm_medium, t.utm_campaign, t.utm_term, t.utm_content,
+            t.gclid, t.fbclid,
+            JSON.stringify(r),
+          ];
         });
         await sql`
-          INSERT INTO referrals (rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at, customer_email)
+          INSERT INTO referrals (
+            rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at,
+            became_lead_at, visitor_id, customer_email, customer_id,
+            referrer, landing_page,
+            utm_source, utm_medium, utm_campaign, utm_term, utm_content,
+            gclid, fbclid, raw_payload
+          )
           SELECT * FROM unnest(
-            ${rows.map(r => r[0])}::text[], ${rows.map(r => r[1])}::text[],
-            ${rows.map(r => r[2])}::text[], ${rows.map(r => r[3])}::text[],
-            ${rows.map(r => r[4])}::text[], ${rows.map(r => r[5])}::timestamptz[],
-            ${rows.map(r => r[6])}::timestamptz[], ${rows.map(r => r[7])}::text[]
-          ) AS t(rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at, customer_email)
+            ${rows.map(r => r[0])}::text[],   ${rows.map(r => r[1])}::text[],
+            ${rows.map(r => r[2])}::text[],   ${rows.map(r => r[3])}::text[],
+            ${rows.map(r => r[4])}::text[],   ${rows.map(r => r[5])}::timestamptz[],
+            ${rows.map(r => r[6])}::timestamptz[], ${rows.map(r => r[7])}::timestamptz[],
+            ${rows.map(r => r[8])}::text[],   ${rows.map(r => r[9])}::text[],
+            ${rows.map(r => r[10])}::text[],  ${rows.map(r => r[11])}::text[],
+            ${rows.map(r => r[12])}::text[],  ${rows.map(r => r[13])}::text[],
+            ${rows.map(r => r[14])}::text[],  ${rows.map(r => r[15])}::text[],
+            ${rows.map(r => r[16])}::text[],  ${rows.map(r => r[17])}::text[],
+            ${rows.map(r => r[18])}::text[],  ${rows.map(r => r[19])}::text[],
+            ${rows.map(r => r[20])}::jsonb[]
+          ) AS t(
+            rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at,
+            became_lead_at, visitor_id, customer_email, customer_id,
+            referrer, landing_page,
+            utm_source, utm_medium, utm_campaign, utm_term, utm_content,
+            gclid, fbclid, raw_payload
+          )
           ON CONFLICT (rewardful_id) DO UPDATE SET
-            status = EXCLUDED.status, affiliate_id = COALESCE(EXCLUDED.affiliate_id, referrals.affiliate_id),
+            status = EXCLUDED.status,
+            affiliate_id = COALESCE(EXCLUDED.affiliate_id, referrals.affiliate_id),
             converted_at = COALESCE(EXCLUDED.converted_at, referrals.converted_at),
-            customer_email = COALESCE(EXCLUDED.customer_email, referrals.customer_email)
+            became_lead_at = COALESCE(EXCLUDED.became_lead_at, referrals.became_lead_at),
+            visitor_id = COALESCE(EXCLUDED.visitor_id, referrals.visitor_id),
+            customer_email = COALESCE(EXCLUDED.customer_email, referrals.customer_email),
+            customer_id = COALESCE(EXCLUDED.customer_id, referrals.customer_id),
+            referrer = COALESCE(EXCLUDED.referrer, referrals.referrer),
+            landing_page = COALESCE(EXCLUDED.landing_page, referrals.landing_page),
+            utm_source = COALESCE(EXCLUDED.utm_source, referrals.utm_source),
+            utm_medium = COALESCE(EXCLUDED.utm_medium, referrals.utm_medium),
+            utm_campaign = COALESCE(EXCLUDED.utm_campaign, referrals.utm_campaign),
+            utm_term = COALESCE(EXCLUDED.utm_term, referrals.utm_term),
+            utm_content = COALESCE(EXCLUDED.utm_content, referrals.utm_content),
+            gclid = COALESCE(EXCLUDED.gclid, referrals.gclid),
+            fbclid = COALESCE(EXCLUDED.fbclid, referrals.fbclid),
+            raw_payload = COALESCE(EXCLUDED.raw_payload, referrals.raw_payload)
         `;
       }
     }

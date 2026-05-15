@@ -63,6 +63,36 @@ async function migrate() {
   await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS country_name TEXT`;
   await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS customer_email TEXT`;
 
+  // Brand-bidding / fraud detection: capture traffic source attribution
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS became_lead_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS visitor_id TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS customer_email TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS customer_id TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS referrer TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS landing_page TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS utm_source TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS utm_medium TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS utm_campaign TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS utm_term TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS utm_content TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS gclid TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS fbclid TEXT`;
+  await sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS raw_payload JSONB`;
+
+  // Affiliate manual-review state for fraud workflow
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS review_status TEXT DEFAULT 'unreviewed'`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS review_notes TEXT`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS known_url TEXT`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS risk_score INT`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS risk_signals JSONB`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS risk_updated_at TIMESTAMPTZ`;
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_referrals_affiliate_id ON referrals (affiliate_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_referrals_created_at ON referrals (created_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_affiliates_review_status ON affiliates (review_status)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_affiliates_risk_score ON affiliates (risk_score)`;
+
   await sql`
     CREATE TABLE IF NOT EXISTS sales (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

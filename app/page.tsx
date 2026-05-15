@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { MetricCard } from '@/components/MetricCard';
 import { DayOnDayChart } from '@/components/DayOnDayChart';
 import { TopAffiliatesPie } from '@/components/TopAffiliatesPie';
@@ -254,7 +255,11 @@ export default function Dashboard() {
             <h1 className="text-2xl font-bold text-gray-900">Affiliate Commission Dashboard</h1>
             <p className="text-sm text-gray-400 mt-1">Powered by Rewardful</p>
           </div>
-          <div className="text-right">
+          <div className="flex items-start gap-4">
+            <Link href="/fraud" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-red-50 border border-red-200 text-red-700 text-xs font-medium hover:bg-red-100">
+              🚩 Fraud audit
+            </Link>
+            <div className="text-right">
             <p className="text-xs text-gray-400">{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()} · auto-refreshes every 30s` : ''}</p>
             <p className="text-xs mt-0.5">
               {syncing ? <span className="text-indigo-400 animate-pulse">Syncing with Rewardful...</span>
@@ -264,6 +269,7 @@ export default function Dashboard() {
             <button onClick={sync} disabled={syncing} className="text-xs text-indigo-500 hover:text-indigo-700 mt-0.5 disabled:opacity-40">
               {syncing ? 'Syncing...' : 'Sync now'}
             </button>
+            </div>
           </div>
         </div>
 

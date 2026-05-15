@@ -1,6 +1,7 @@
 import { neon } from '@neondatabase/serverless';
 import * as dotenv from 'dotenv';
 import { resolve } from 'path';
+import { extractTrafficFields } from '../lib/fraud-detection';
 
 dotenv.config({ path: resolve(process.cwd(), '.env.local') });
 
@@ -145,28 +146,64 @@ async function backfillReferrals(referrals: any[], linkMap: Map<string, string>)
       const isConversion = r.conversion_state === 'conversion';
       const isLead = r.conversion_state === 'lead';
       const status = isConversion ? 'converted' : isLead ? 'lead' : 'visitor';
+      const t = extractTrafficFields(r);
       return [
         r.id, affiliateId, linkId, r.link?.token ?? null,
         status, r.created_at ?? null, r.became_conversion_at ?? null,
+        t.became_lead_at, t.visitor_id, t.customer_email, t.customer_id,
+        t.referrer, t.landing_page,
+        t.utm_source, t.utm_medium, t.utm_campaign, t.utm_term, t.utm_content,
+        t.gclid, t.fbclid,
+        JSON.stringify(r),
       ];
     });
     await sql`
-      INSERT INTO referrals (rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at)
+      INSERT INTO referrals (
+        rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at,
+        became_lead_at, visitor_id, customer_email, customer_id,
+        referrer, landing_page,
+        utm_source, utm_medium, utm_campaign, utm_term, utm_content,
+        gclid, fbclid, raw_payload
+      )
       SELECT * FROM unnest(
-        ${rows.map(r => r[0])}::text[],
-        ${rows.map(r => r[1])}::text[],
-        ${rows.map(r => r[2])}::text[],
-        ${rows.map(r => r[3])}::text[],
-        ${rows.map(r => r[4])}::text[],
-        ${rows.map(r => r[5])}::timestamptz[],
-        ${rows.map(r => r[6])}::timestamptz[]
-      ) AS t(rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at)
+        ${rows.map(r => r[0])}::text[],   ${rows.map(r => r[1])}::text[],
+        ${rows.map(r => r[2])}::text[],   ${rows.map(r => r[3])}::text[],
+        ${rows.map(r => r[4])}::text[],   ${rows.map(r => r[5])}::timestamptz[],
+        ${rows.map(r => r[6])}::timestamptz[], ${rows.map(r => r[7])}::timestamptz[],
+        ${rows.map(r => r[8])}::text[],   ${rows.map(r => r[9])}::text[],
+        ${rows.map(r => r[10])}::text[],  ${rows.map(r => r[11])}::text[],
+        ${rows.map(r => r[12])}::text[],  ${rows.map(r => r[13])}::text[],
+        ${rows.map(r => r[14])}::text[],  ${rows.map(r => r[15])}::text[],
+        ${rows.map(r => r[16])}::text[],  ${rows.map(r => r[17])}::text[],
+        ${rows.map(r => r[18])}::text[],  ${rows.map(r => r[19])}::text[],
+        ${rows.map(r => r[20])}::jsonb[]
+      ) AS t(
+        rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at,
+        became_lead_at, visitor_id, customer_email, customer_id,
+        referrer, landing_page,
+        utm_source, utm_medium, utm_campaign, utm_term, utm_content,
+        gclid, fbclid, raw_payload
+      )
       ON CONFLICT (rewardful_id) DO UPDATE SET
         affiliate_id = EXCLUDED.affiliate_id,
         link_id = EXCLUDED.link_id,
         link_token = EXCLUDED.link_token,
         status = EXCLUDED.status,
-        converted_at = COALESCE(EXCLUDED.converted_at, referrals.converted_at)
+        converted_at = COALESCE(EXCLUDED.converted_at, referrals.converted_at),
+        became_lead_at = COALESCE(EXCLUDED.became_lead_at, referrals.became_lead_at),
+        visitor_id = COALESCE(EXCLUDED.visitor_id, referrals.visitor_id),
+        customer_email = COALESCE(EXCLUDED.customer_email, referrals.customer_email),
+        customer_id = COALESCE(EXCLUDED.customer_id, referrals.customer_id),
+        referrer = COALESCE(EXCLUDED.referrer, referrals.referrer),
+        landing_page = COALESCE(EXCLUDED.landing_page, referrals.landing_page),
+        utm_source = COALESCE(EXCLUDED.utm_source, referrals.utm_source),
+        utm_medium = COALESCE(EXCLUDED.utm_medium, referrals.utm_medium),
+        utm_campaign = COALESCE(EXCLUDED.utm_campaign, referrals.utm_campaign),
+        utm_term = COALESCE(EXCLUDED.utm_term, referrals.utm_term),
+        utm_content = COALESCE(EXCLUDED.utm_content, referrals.utm_content),
+        gclid = COALESCE(EXCLUDED.gclid, referrals.gclid),
+        fbclid = COALESCE(EXCLUDED.fbclid, referrals.fbclid),
+        raw_payload = COALESCE(EXCLUDED.raw_payload, referrals.raw_payload)
     `;
   }
 }
@@ -232,37 +269,6 @@ async function backfillCommissions(commissions: any[]) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function backfillSales(sales: any[]) {
-  for (const batch of chunks(dedupe(sales), 500)) {
-    const rows = batch.map((s) => [
-      s.id,
-      s.affiliate?.id ?? null,
-      s.referral?.id ?? null,
-      s.sale_amount_cents ?? 0,
-      (s.currency ?? 'USD').toLowerCase(),
-      s.refund ? 'refunded' : 'created',
-      s.created_at ?? null,
-    ]);
-    await sql`
-      INSERT INTO sales (rewardful_id, affiliate_id, referral_id, amount_cents, currency, status, created_at)
-      SELECT * FROM unnest(
-        ${rows.map(r => r[0])}::text[],
-        ${rows.map(r => r[1])}::text[],
-        ${rows.map(r => r[2])}::text[],
-        ${rows.map(r => r[3])}::int[],
-        ${rows.map(r => r[4])}::text[],
-        ${rows.map(r => r[5])}::text[],
-        ${rows.map(r => r[6])}::timestamptz[]
-      ) AS t(rewardful_id, affiliate_id, referral_id, amount_cents, currency, status, created_at)
-      ON CONFLICT (rewardful_id) DO UPDATE SET
-        status = EXCLUDED.status,
-        amount_cents = EXCLUDED.amount_cents
-    `;
-  }
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function backfillPayouts(payouts: any[]) {
   for (const batch of chunks(dedupe(payouts), 500)) {
     const rows = batch.map((p) => [
@@ -303,8 +309,8 @@ async function main() {
   const linkMap = await buildLinkMap();
   console.log(`→ Built map with ${linkMap.size} links\n`);
 
-  console.log('Fetching referrals (all time)...');
-  const referrals = await fetchAll('/referrals', ALL_TIME_DATE);
+  console.log('Fetching referrals (all time, with visits)...');
+  const referrals = await fetchAll('/referrals?expand[]=visits&expand[]=customer', ALL_TIME_DATE);
   console.log(`→ Inserting ${referrals.length} referrals into DB...`);
   await backfillReferrals(referrals as never[], linkMap);
   console.log('✅ Referrals done\n');

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/db';
+import { extractTrafficFields } from '@/lib/fraud-detection';
 
 const API_SECRET = process.env.REWARDFUL_API_SECRET!;
 const BASE_URL = 'https://api.getrewardful.com/v1';
@@ -75,8 +76,8 @@ export async function GET(req: NextRequest) {
       for (const l of links) linkMap.set(l.id, a.id as string);
     }
 
-    // Sync referrals
-    const referrals = dedupe(await fetchRecent('/referrals'));
+    // Sync referrals (with visits expand for fraud detection)
+    const referrals = dedupe(await fetchRecent('/referrals?expand[]=visits&expand[]=customer'));
     for (const r of referrals) {
       const linkId = (r.link as { id?: string })?.id ?? null;
       const linkToken = (r.link as { token?: string })?.token ?? null;
@@ -84,12 +85,41 @@ export async function GET(req: NextRequest) {
       const isConversion = r.conversion_state === 'conversion';
       const isLead = r.conversion_state === 'lead';
       const status = isConversion ? 'converted' : isLead ? 'lead' : 'visitor';
+      const t = extractTrafficFields(r);
       await sql`
-        INSERT INTO referrals (rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at)
-        VALUES (${r.id}, ${affiliateId}, ${linkId}, ${linkToken}, ${status}, ${r.created_at ?? null}, ${r.became_conversion_at ?? null})
+        INSERT INTO referrals (
+          rewardful_id, affiliate_id, link_id, link_token, status, created_at, converted_at,
+          became_lead_at, visitor_id, customer_email, customer_id,
+          referrer, landing_page,
+          utm_source, utm_medium, utm_campaign, utm_term, utm_content,
+          gclid, fbclid, raw_payload
+        )
+        VALUES (
+          ${r.id}, ${affiliateId}, ${linkId}, ${linkToken}, ${status},
+          ${r.created_at ?? null}, ${r.became_conversion_at ?? null},
+          ${t.became_lead_at}, ${t.visitor_id}, ${t.customer_email}, ${t.customer_id},
+          ${t.referrer}, ${t.landing_page},
+          ${t.utm_source}, ${t.utm_medium}, ${t.utm_campaign}, ${t.utm_term}, ${t.utm_content},
+          ${t.gclid}, ${t.fbclid}, ${JSON.stringify(r)}::jsonb
+        )
         ON CONFLICT (rewardful_id) DO UPDATE SET
           affiliate_id = EXCLUDED.affiliate_id, link_id = EXCLUDED.link_id, link_token = EXCLUDED.link_token,
-          status = EXCLUDED.status, converted_at = COALESCE(EXCLUDED.converted_at, referrals.converted_at)
+          status = EXCLUDED.status,
+          converted_at = COALESCE(EXCLUDED.converted_at, referrals.converted_at),
+          became_lead_at = COALESCE(EXCLUDED.became_lead_at, referrals.became_lead_at),
+          visitor_id = COALESCE(EXCLUDED.visitor_id, referrals.visitor_id),
+          customer_email = COALESCE(EXCLUDED.customer_email, referrals.customer_email),
+          customer_id = COALESCE(EXCLUDED.customer_id, referrals.customer_id),
+          referrer = COALESCE(EXCLUDED.referrer, referrals.referrer),
+          landing_page = COALESCE(EXCLUDED.landing_page, referrals.landing_page),
+          utm_source = COALESCE(EXCLUDED.utm_source, referrals.utm_source),
+          utm_medium = COALESCE(EXCLUDED.utm_medium, referrals.utm_medium),
+          utm_campaign = COALESCE(EXCLUDED.utm_campaign, referrals.utm_campaign),
+          utm_term = COALESCE(EXCLUDED.utm_term, referrals.utm_term),
+          utm_content = COALESCE(EXCLUDED.utm_content, referrals.utm_content),
+          gclid = COALESCE(EXCLUDED.gclid, referrals.gclid),
+          fbclid = COALESCE(EXCLUDED.fbclid, referrals.fbclid),
+          raw_payload = COALESCE(EXCLUDED.raw_payload, referrals.raw_payload)
       `;
     }
     counts.referrals = referrals.length;
