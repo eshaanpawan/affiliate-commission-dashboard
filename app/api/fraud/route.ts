@@ -23,8 +23,27 @@ interface ReferralRow extends ReferralSignalRow {
   affiliate_id: string;
 }
 
+interface CommissionStatRow {
+  affiliate_id: string;
+  total: number;
+  refunded: number;
+  refunded_amount_cents: number;
+}
+
+interface OverlapRow {
+  affiliate_id: string;
+  shared_visitor_count: number;
+  shared_customer_count: number;
+}
+
 export async function GET() {
-  const [affiliatesRaw, referralsRaw] = await Promise.all([
+  const [
+    affiliatesRaw,
+    referralsRaw,
+    commissionStatsRaw,
+    visitorOverlapRaw,
+    customerOverlapRaw,
+  ] = await Promise.all([
     sql`
       SELECT
         a.rewardful_id, a.first_name, a.last_name, a.email, a.status, a.created_at,
@@ -49,15 +68,58 @@ export async function GET() {
       SELECT affiliate_id, status, created_at, converted_at,
              referrer, landing_page,
              utm_source, utm_medium, utm_campaign,
-             gclid, fbclid
+             gclid, fbclid,
+             customer_email, visitor_id
       FROM referrals
       WHERE status != 'deleted'
         AND affiliate_id IS NOT NULL
         AND created_at >= NOW() - INTERVAL '180 days'
     `,
+    sql`
+      SELECT
+        affiliate_id,
+        COUNT(*) AS total,
+        COUNT(CASE WHEN status IN ('voided', 'refunded', 'deleted') THEN 1 END) AS refunded,
+        COALESCE(SUM(CASE WHEN status IN ('voided', 'refunded', 'deleted') THEN amount_cents ELSE 0 END), 0) AS refunded_amount_cents
+      FROM commissions
+      WHERE affiliate_id IS NOT NULL
+      GROUP BY affiliate_id
+    `,
+    // Visitor IDs that appear under >1 affiliate — count per-affiliate
+    sql`
+      WITH shared AS (
+        SELECT visitor_id
+        FROM referrals
+        WHERE visitor_id IS NOT NULL AND affiliate_id IS NOT NULL AND status != 'deleted'
+        GROUP BY visitor_id
+        HAVING COUNT(DISTINCT affiliate_id) > 1
+      )
+      SELECT r.affiliate_id, COUNT(DISTINCT r.visitor_id) AS shared_visitor_count
+      FROM referrals r JOIN shared s ON s.visitor_id = r.visitor_id
+      WHERE r.affiliate_id IS NOT NULL
+      GROUP BY r.affiliate_id
+    `,
+    // Customer emails seen under >1 affiliate
+    sql`
+      WITH shared AS (
+        SELECT LOWER(customer_email) AS email
+        FROM referrals
+        WHERE customer_email IS NOT NULL AND affiliate_id IS NOT NULL AND status != 'deleted'
+        GROUP BY LOWER(customer_email)
+        HAVING COUNT(DISTINCT affiliate_id) > 1
+      )
+      SELECT r.affiliate_id, COUNT(DISTINCT LOWER(r.customer_email)) AS shared_customer_count
+      FROM referrals r JOIN shared s ON s.email = LOWER(r.customer_email)
+      WHERE r.affiliate_id IS NOT NULL
+      GROUP BY r.affiliate_id
+    `,
   ]);
+
   const affiliates = affiliatesRaw as unknown as AffiliateRow[];
   const referrals = referralsRaw as unknown as ReferralRow[];
+  const commissionStats = commissionStatsRaw as unknown as CommissionStatRow[];
+  const visitorOverlap = visitorOverlapRaw as unknown as OverlapRow[];
+  const customerOverlap = customerOverlapRaw as unknown as OverlapRow[];
 
   // Group referrals by affiliate
   const byAffiliate = new Map<string, ReferralSignalRow[]>();
@@ -68,10 +130,33 @@ export async function GET() {
     byAffiliate.set(r.affiliate_id, list);
   }
 
+  // Lookup maps for commission/overlap context
+  const refundMap = new Map<string, CommissionStatRow>();
+  for (const c of commissionStats) refundMap.set(c.affiliate_id, c);
+
+  const visitorOverlapMap = new Map<string, number>();
+  for (const o of visitorOverlap) visitorOverlapMap.set(o.affiliate_id, Number(o.shared_visitor_count));
+  const customerOverlapMap = new Map<string, number>();
+  for (const o of customerOverlap) customerOverlapMap.set(o.affiliate_id, Number(o.shared_customer_count));
+
   // Compute risk for each affiliate
   const enriched = affiliates.map((a) => {
     const refs = byAffiliate.get(a.rewardful_id) ?? [];
-    const risk = computeAffiliateRisk({ rewardful_id: a.rewardful_id, referrals: refs });
+    const refundCtx = refundMap.get(a.rewardful_id);
+    const risk = computeAffiliateRisk({
+      rewardful_id: a.rewardful_id,
+      referrals: refs,
+      affiliate: { email: a.email, first_name: a.first_name, last_name: a.last_name },
+      refunds: refundCtx ? {
+        total_commissions: Number(refundCtx.total),
+        refunded_commissions: Number(refundCtx.refunded),
+        refunded_amount_cents: Number(refundCtx.refunded_amount_cents),
+      } : undefined,
+      crossAffiliate: {
+        shared_visitor_count: visitorOverlapMap.get(a.rewardful_id) ?? 0,
+        shared_customer_count: customerOverlapMap.get(a.rewardful_id) ?? 0,
+      },
+    });
     return {
       id: a.rewardful_id,
       name: [a.first_name, a.last_name].filter(Boolean).join(' ') || a.email || '(no name)',
@@ -107,6 +192,10 @@ export async function GET() {
     unpaidAtRiskCents: enriched
       .filter(e => e.risk.band === 'high')
       .reduce((sum, e) => sum + e.unpaidCommissionCents, 0),
+    // New: cross-affiliate anomaly counts
+    affiliatesWithSelfReferral: enriched.filter(e => e.risk.stats.selfReferralCount > 0).length,
+    affiliatesWithSharedCustomers: enriched.filter(e => e.risk.stats.sharedCustomerCount > 0).length,
+    affiliatesWithHighRefundRate: enriched.filter(e => e.risk.stats.refundRate >= 0.15).length,
   };
 
   return NextResponse.json({ summary, affiliates: enriched });

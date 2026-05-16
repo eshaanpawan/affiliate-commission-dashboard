@@ -89,6 +89,17 @@ async function upsertSale(eventType: string, obj: any) {
       status = EXCLUDED.status,
       amount_cents = EXCLUDED.amount_cents
   `;
+
+  // Cascade: when a sale is refunded/deleted, void any commissions tied to it
+  // so the clawback shows up immediately without waiting for the next sync.
+  if (eventType === 'sale.refunded' || eventType === 'sale.deleted') {
+    await sql`
+      UPDATE commissions
+      SET status = ${eventType === 'sale.deleted' ? 'deleted' : 'voided'}
+      WHERE sale_id = ${obj.id}
+        AND status NOT IN ('voided', 'deleted')
+    `;
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

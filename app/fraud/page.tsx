@@ -27,6 +27,10 @@ interface AffiliateRisk {
     topSourcePct: number;
     topSource: string | null;
     medianTimeToConvSec: number | null;
+    refundRate: number;
+    selfReferralCount: number;
+    sharedVisitorCount: number;
+    sharedCustomerCount: number;
   };
 }
 
@@ -54,6 +58,9 @@ interface FraudListResponse {
     flagged: number;
     cleared: number;
     unpaidAtRiskCents: number;
+    affiliatesWithSelfReferral: number;
+    affiliatesWithSharedCustomers: number;
+    affiliatesWithHighRefundRate: number;
   };
   affiliates: FraudAffiliate[];
 }
@@ -438,29 +445,49 @@ export default function FraudPage() {
 
         {/* Summary cards */}
         {data && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-            <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-              <p className="text-xs font-medium text-red-700">High risk</p>
-              <p className="text-2xl font-bold text-red-700 mt-1">{data.summary.highRisk}</p>
-              <p className="text-xs text-red-600/70 mt-0.5">{fmt(data.summary.unpaidAtRiskCents)} unpaid</p>
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                <p className="text-xs font-medium text-red-700">High risk</p>
+                <p className="text-2xl font-bold text-red-700 mt-1">{data.summary.highRisk}</p>
+                <p className="text-xs text-red-600/70 mt-0.5">{fmt(data.summary.unpaidAtRiskCents)} unpaid</p>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <p className="text-xs font-medium text-amber-700">Medium risk</p>
+                <p className="text-2xl font-bold text-amber-700 mt-1">{data.summary.mediumRisk}</p>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-4">
+                <p className="text-xs font-medium text-gray-500">Low risk</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">{data.summary.lowRisk}</p>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-4">
+                <p className="text-xs font-medium text-gray-500">Flagged</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">🚩 {data.summary.flagged}</p>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-4">
+                <p className="text-xs font-medium text-gray-500">Cleared</p>
+                <p className="text-2xl font-bold text-gray-900 mt-1">✓ {data.summary.cleared}</p>
+              </div>
             </div>
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-              <p className="text-xs font-medium text-amber-700">Medium risk</p>
-              <p className="text-2xl font-bold text-amber-700 mt-1">{data.summary.mediumRisk}</p>
+            {/* Cross-affiliate / refund / self-referral anomaly summary */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                <p className="text-xs font-semibold text-red-700">Self-referral matches</p>
+                <p className="text-2xl font-bold text-red-700 mt-1">{data.summary.affiliatesWithSelfReferral}</p>
+                <p className="text-xs text-red-600/70 mt-0.5">Affiliates whose own email matches a customer email</p>
+              </div>
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+                <p className="text-xs font-semibold text-orange-700">Cross-affiliate customer overlap</p>
+                <p className="text-2xl font-bold text-orange-700 mt-1">{data.summary.affiliatesWithSharedCustomers}</p>
+                <p className="text-xs text-orange-600/70 mt-0.5">Affiliates with customer emails also seen under another affiliate</p>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                <p className="text-xs font-semibold text-amber-700">High refund rate</p>
+                <p className="text-2xl font-bold text-amber-700 mt-1">{data.summary.affiliatesWithHighRefundRate}</p>
+                <p className="text-xs text-amber-600/70 mt-0.5">Affiliates with ≥15% refunded/voided commissions</p>
+              </div>
             </div>
-            <div className="bg-white border border-gray-200 rounded-xl p-4">
-              <p className="text-xs font-medium text-gray-500">Low risk</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">{data.summary.lowRisk}</p>
-            </div>
-            <div className="bg-white border border-gray-200 rounded-xl p-4">
-              <p className="text-xs font-medium text-gray-500">Flagged</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">🚩 {data.summary.flagged}</p>
-            </div>
-            <div className="bg-white border border-gray-200 rounded-xl p-4">
-              <p className="text-xs font-medium text-gray-500">Cleared</p>
-              <p className="text-2xl font-bold text-gray-900 mt-1">✓ {data.summary.cleared}</p>
-            </div>
-          </div>
+          </>
         )}
 
         {/* Filters */}
@@ -490,6 +517,7 @@ export default function FraudPage() {
                   <th className="text-left px-3 py-3 font-medium">Top signals</th>
                   <th className="text-right px-3 py-3 font-medium">Refs</th>
                   <th className="text-right px-3 py-3 font-medium">Conv %</th>
+                  <th className="text-right px-3 py-3 font-medium" title="Self-referral / shared customer / refund">SR / SC / Rf</th>
                   <th className="text-right px-3 py-3 font-medium">gclid %</th>
                   <th className="text-right px-3 py-3 font-medium">Instant %</th>
                   <th className="text-right px-3 py-3 font-medium">Unpaid</th>
@@ -520,6 +548,13 @@ export default function FraudPage() {
                     <td className="px-3 py-3 text-right text-gray-700">{a.referrals}</td>
                     <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.convRate > 0.4 ? 'text-red-600' : 'text-gray-700'}`}>
                       {(a.risk.stats.convRate * 100).toFixed(0)}%
+                    </td>
+                    <td className="px-3 py-3 text-right text-xs">
+                      <span className={a.risk.stats.selfReferralCount > 0 ? 'text-red-600 font-bold' : 'text-gray-300'}>{a.risk.stats.selfReferralCount}</span>
+                      <span className="text-gray-300 mx-0.5">/</span>
+                      <span className={a.risk.stats.sharedCustomerCount > 0 ? 'text-orange-600 font-bold' : 'text-gray-300'}>{a.risk.stats.sharedCustomerCount}</span>
+                      <span className="text-gray-300 mx-0.5">/</span>
+                      <span className={a.risk.stats.refundRate >= 0.15 ? 'text-amber-600 font-bold' : 'text-gray-300'}>{a.risk.stats.refundRate > 0 ? (a.risk.stats.refundRate * 100).toFixed(0) + '%' : '—'}</span>
                     </td>
                     <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.gclidPct > 0.15 ? 'text-red-600' : 'text-gray-400'}`}>
                       {a.risk.stats.gclidPct > 0 ? `${(a.risk.stats.gclidPct * 100).toFixed(0)}%` : '—'}

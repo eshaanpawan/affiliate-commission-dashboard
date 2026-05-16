@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import sql from '@/lib/db';
-import { computeAffiliateRisk, ReferralSignalRow } from '@/lib/fraud-detection';
+import { computeAffiliateRisk, normalizeEmail, ReferralSignalRow } from '@/lib/fraud-detection';
 
 interface ReferralRow extends ReferralSignalRow {
   rewardful_id: string;
@@ -14,7 +14,7 @@ export async function GET(
 ) {
   const { id } = await context.params;
 
-  const [affiliate, referralsRaw, links] = await Promise.all([
+  const [affiliate, referralsRaw, links, commissionStats, visitorOverlap, customerOverlap] = await Promise.all([
     sql`
       SELECT
         rewardful_id, first_name, last_name, email, status, created_at,
@@ -26,7 +26,7 @@ export async function GET(
       LIMIT 1
     `,
     sql`
-      SELECT rewardful_id, link_token, customer_email,
+      SELECT rewardful_id, link_token, customer_email, visitor_id,
              status, created_at, converted_at,
              referrer, landing_page,
              utm_source, utm_medium, utm_campaign,
@@ -42,6 +42,34 @@ export async function GET(
       FROM referrals
       WHERE affiliate_id = ${id} AND link_token IS NOT NULL
     `,
+    sql`
+      SELECT
+        COUNT(*) AS total,
+        COUNT(CASE WHEN status IN ('voided', 'refunded', 'deleted') THEN 1 END) AS refunded,
+        COALESCE(SUM(CASE WHEN status IN ('voided', 'refunded', 'deleted') THEN amount_cents ELSE 0 END), 0) AS refunded_amount_cents
+      FROM commissions
+      WHERE affiliate_id = ${id}
+    `,
+    sql`
+      SELECT COUNT(DISTINCT r.visitor_id) AS cnt
+      FROM referrals r
+      WHERE r.affiliate_id = ${id} AND r.visitor_id IS NOT NULL AND r.status != 'deleted'
+        AND r.visitor_id IN (
+          SELECT visitor_id FROM referrals
+          WHERE visitor_id IS NOT NULL AND affiliate_id IS NOT NULL AND status != 'deleted'
+          GROUP BY visitor_id HAVING COUNT(DISTINCT affiliate_id) > 1
+        )
+    `,
+    sql`
+      SELECT COUNT(DISTINCT LOWER(r.customer_email)) AS cnt
+      FROM referrals r
+      WHERE r.affiliate_id = ${id} AND r.customer_email IS NOT NULL AND r.status != 'deleted'
+        AND LOWER(r.customer_email) IN (
+          SELECT LOWER(customer_email) FROM referrals
+          WHERE customer_email IS NOT NULL AND affiliate_id IS NOT NULL AND status != 'deleted'
+          GROUP BY LOWER(customer_email) HAVING COUNT(DISTINCT affiliate_id) > 1
+        )
+    `,
   ]);
   const referrals = referralsRaw as unknown as ReferralRow[];
 
@@ -50,6 +78,7 @@ export async function GET(
   }
 
   const a = affiliate[0];
+  const cs = commissionStats[0] ?? {};
   const risk = computeAffiliateRisk({
     rewardful_id: id,
     referrals: referrals.map(r => ({
@@ -57,7 +86,19 @@ export async function GET(
       referrer: r.referrer, landing_page: r.landing_page,
       utm_source: r.utm_source, utm_medium: r.utm_medium, utm_campaign: r.utm_campaign,
       gclid: r.gclid, fbclid: r.fbclid,
+      customer_email: r.customer_email,
+      visitor_id: (r as { visitor_id?: string | null }).visitor_id ?? null,
     })),
+    affiliate: { email: a.email, first_name: a.first_name, last_name: a.last_name },
+    refunds: {
+      total_commissions: Number(cs.total ?? 0),
+      refunded_commissions: Number(cs.refunded ?? 0),
+      refunded_amount_cents: Number(cs.refunded_amount_cents ?? 0),
+    },
+    crossAffiliate: {
+      shared_visitor_count: Number(visitorOverlap[0]?.cnt ?? 0),
+      shared_customer_count: Number(customerOverlap[0]?.cnt ?? 0),
+    },
   });
 
   // Build top referrers / landing pages distribution
@@ -115,6 +156,9 @@ export async function GET(
       if (r.utm_medium && ['cpc', 'ppc', 'paid', 'sem'].includes(r.utm_medium.toLowerCase())) flags.push('paid_utm');
       if (r.referrer && /google\.|googleadservices|\/aclk/i.test(r.referrer)) flags.push('google_referrer');
       if (ttcSec !== null && ttcSec < 300 && r.status === 'converted') flags.push('instant_convert');
+      const normCustomer = normalizeEmail(r.customer_email);
+      const normAffiliate = normalizeEmail(a.email);
+      if (normCustomer && normAffiliate && normCustomer === normAffiliate) flags.push('self_referral');
       return {
         id: r.rewardful_id,
         status: r.status,

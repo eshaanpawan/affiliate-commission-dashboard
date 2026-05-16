@@ -29,11 +29,36 @@ export interface ReferralSignalRow {
   created_at: string | Date | null;
   converted_at: string | Date | null;
   status: string;
+  customer_email?: string | null;
+  visitor_id?: string | null;
+}
+
+export interface AffiliateContext {
+  email: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  link_tokens?: string[];
+}
+
+export interface RefundContext {
+  total_commissions: number;
+  refunded_commissions: number;
+  refunded_amount_cents: number;
+}
+
+export interface CrossAffiliateContext {
+  // visitor_ids that appeared under multiple affiliates
+  shared_visitor_count: number;
+  // customer_emails that appeared under multiple affiliates
+  shared_customer_count: number;
 }
 
 export interface AffiliateRiskInput {
   rewardful_id: string;
   referrals: ReferralSignalRow[];
+  affiliate?: AffiliateContext;
+  refunds?: RefundContext;
+  crossAffiliate?: CrossAffiliateContext;
 }
 
 export interface RiskSignal {
@@ -61,6 +86,10 @@ export interface AffiliateRisk {
     topSourcePct: number;
     topSource: string | null;
     medianTimeToConvSec: number | null;
+    refundRate: number;
+    selfReferralCount: number;
+    sharedVisitorCount: number;
+    sharedCustomerCount: number;
   };
 }
 
@@ -93,6 +122,55 @@ function classifySource(r: ReferralSignalRow): string {
     }
   }
   return 'direct';
+}
+
+// Normalize an email so Gmail-style aliases collapse to the same identity.
+// "Kate.Lee+promo@gmail.com" → "katelee@gmail.com". Catches the obvious
+// self-referral trick where someone sub-addresses their own gmail.
+export function normalizeEmail(email: string | null | undefined): string | null {
+  if (!email) return null;
+  const lower = email.trim().toLowerCase();
+  const at = lower.lastIndexOf('@');
+  if (at < 0) return lower;
+  let local = lower.slice(0, at);
+  const domain = lower.slice(at + 1);
+  // Strip plus-addressing on all providers
+  const plus = local.indexOf('+');
+  if (plus >= 0) local = local.slice(0, plus);
+  // Strip dots only on Gmail/Google Workspace (they ignore dots in local part)
+  if (domain === 'gmail.com' || domain === 'googlemail.com') {
+    local = local.replace(/\./g, '');
+  }
+  return `${local}@${domain}`;
+}
+
+function isFreeMailDomain(domain: string): boolean {
+  const free = new Set([
+    'gmail.com', 'googlemail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
+    'live.com', 'aol.com', 'icloud.com', 'me.com', 'proton.me', 'protonmail.com',
+    'mail.ru', 'yandex.ru', 'qq.com', '163.com',
+  ]);
+  return free.has(domain.toLowerCase());
+}
+
+// Detect self-referral: customer_email matches the affiliate themselves.
+// Three confidence levels:
+//   exact   — normalized emails are identical
+//   alias   — same local-part heuristics (Gmail dots/plus)
+//   domain  — same business email domain (only flagged for non-free domains)
+type SelfReferralLevel = 'exact' | 'alias' | 'domain' | null;
+function selfReferralLevel(customerEmail: string | null, affiliateEmail: string | null): SelfReferralLevel {
+  if (!customerEmail || !affiliateEmail) return null;
+  const a = normalizeEmail(affiliateEmail);
+  const c = normalizeEmail(customerEmail);
+  if (!a || !c) return null;
+  if (a === c) return 'exact';
+  const [aLocal, aDomain] = a.split('@');
+  const [cLocal, cDomain] = c.split('@');
+  if (!aDomain || !cDomain) return null;
+  if (aLocal === cLocal && aDomain === cDomain) return 'alias';
+  if (aDomain === cDomain && !isFreeMailDomain(aDomain)) return 'domain';
+  return null;
 }
 
 function median(nums: number[]): number | null {
@@ -152,6 +230,27 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
     return BRAND_TERMS.some(t => haystack.includes(t));
   }).length;
   const brandInUtmPct = n > 0 ? brandInUtmCount / n : 0;
+
+  // Self-referral: customer email matches affiliate's own email or alias.
+  // The single highest-precision fraud signal at SaaS scale (Rewardful/Refgrow).
+  const affEmail = input.affiliate?.email ?? null;
+  let selfExact = 0, selfAlias = 0, selfDomain = 0;
+  for (const r of refs) {
+    const level = selfReferralLevel(r.customer_email ?? null, affEmail);
+    if (level === 'exact') selfExact++;
+    else if (level === 'alias') selfAlias++;
+    else if (level === 'domain') selfDomain++;
+  }
+  const selfReferralCount = selfExact + selfAlias + selfDomain;
+
+  // Refund-rate signal — high refund rate suggests stolen-card / refund-recommission fraud
+  const totalCommissions = input.refunds?.total_commissions ?? 0;
+  const refundedCommissions = input.refunds?.refunded_commissions ?? 0;
+  const refundRate = totalCommissions > 0 ? refundedCommissions / totalCommissions : 0;
+
+  // Cross-affiliate overlap (visitor or customer reuse across affiliates)
+  const sharedVisitorCount = input.crossAffiliate?.shared_visitor_count ?? 0;
+  const sharedCustomerCount = input.crossAffiliate?.shared_customer_count ?? 0;
 
   // Compose signals
   const signals: RiskSignal[] = [];
@@ -228,6 +327,60 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
       detail: `${brandInUtmCount} referrals have "runable" inside the utm_term/utm_campaign/landing page query — almost certainly a brand-keyword ad.`,
     });
   }
+  if (selfExact > 0) {
+    signals.push({
+      key: 'self_referral_exact',
+      label: 'Self-referral (exact email match)',
+      severity: 'high',
+      value: `${selfExact} conversion(s)`,
+      detail: `${selfExact} converted referrals have a customer email that exactly matches this affiliate's account email. The affiliate is paying for the product through their own link to claim commission.`,
+    });
+  }
+  if (selfAlias > 0) {
+    signals.push({
+      key: 'self_referral_alias',
+      label: 'Self-referral (email alias)',
+      severity: 'high',
+      value: `${selfAlias} conversion(s)`,
+      detail: `${selfAlias} customer emails differ from the affiliate's email only by Gmail-style aliasing (dots, +tags). Same person — self-referral.`,
+    });
+  }
+  if (selfDomain > 0) {
+    signals.push({
+      key: 'self_referral_domain',
+      label: 'Same business-email domain',
+      severity: 'medium',
+      value: `${selfDomain} conversion(s)`,
+      detail: `${selfDomain} customer emails share a non-free business email domain with the affiliate. Could be a colleague — manually verify before clawback.`,
+    });
+  }
+  if (refundRate >= 0.15 && totalCommissions >= 3) {
+    signals.push({
+      key: 'high_refund_rate',
+      label: 'High refund rate',
+      severity: refundRate >= 0.4 ? 'high' : 'medium',
+      value: `${(refundRate * 100).toFixed(0)}%`,
+      detail: `${refundedCommissions} of ${totalCommissions} commissions ($${((input.refunds?.refunded_amount_cents ?? 0) / 100).toFixed(2)}) have been refunded or voided. Industry typical is <5% — high refund rates indicate stolen-card or refund-recommission fraud.`,
+    });
+  }
+  if (sharedVisitorCount > 0) {
+    signals.push({
+      key: 'shared_visitors',
+      label: 'Visitor IDs shared across affiliates',
+      severity: sharedVisitorCount >= 5 ? 'high' : 'medium',
+      value: `${sharedVisitorCount} visitor(s)`,
+      detail: `${sharedVisitorCount} of this affiliate's visitors also appeared under other affiliates. Signs of coordinated ring fraud, coupon-extension sniping, or attribution gaming.`,
+    });
+  }
+  if (sharedCustomerCount > 0) {
+    signals.push({
+      key: 'shared_customers',
+      label: 'Customer emails seen under other affiliates',
+      severity: 'high',
+      value: `${sharedCustomerCount} customer(s)`,
+      detail: `${sharedCustomerCount} of this affiliate's customer emails were also referred by another affiliate. Strong indicator of attribution theft (e.g. browser extension sniping last-click) or coordinated fraud.`,
+    });
+  }
 
   // Compose risk score 0-100
   let score = 0;
@@ -239,6 +392,13 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
   if (convRate >= 0.4 && n >= 10) score += Math.min(15, (convRate - 0.4) * 50);
   if (topSourcePct >= 0.85 && n >= 5 && topSource && (topSource.startsWith('google') || topSource.startsWith('paid'))) score += 10;
   if (brandInUtmPct >= 0.1) score += 25;
+  // Self-referral is the strongest signal at SaaS scale — score aggressively
+  if (selfExact > 0) score += 60;        // near-certain fraud, bypass any other gates
+  else if (selfAlias > 0) score += 50;
+  else if (selfDomain > 0) score += 15;  // softer — could be a legitimate colleague
+  if (refundRate >= 0.15 && totalCommissions >= 3) score += Math.min(25, refundRate * 50);
+  if (sharedCustomerCount > 0) score += Math.min(25, sharedCustomerCount * 8);
+  if (sharedVisitorCount > 0) score += Math.min(15, sharedVisitorCount * 3);
   score = Math.max(0, Math.min(100, Math.round(score)));
 
   const band: 'low' | 'medium' | 'high' = score >= 60 ? 'high' : score >= 30 ? 'medium' : 'low';
@@ -260,6 +420,10 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
       topSourcePct,
       topSource,
       medianTimeToConvSec,
+      refundRate,
+      selfReferralCount,
+      sharedVisitorCount,
+      sharedCustomerCount,
     },
   };
 }
