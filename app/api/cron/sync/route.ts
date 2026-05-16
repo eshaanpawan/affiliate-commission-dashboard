@@ -76,8 +76,8 @@ export async function GET(req: NextRequest) {
       for (const l of links) linkMap.set(l.id, a.id as string);
     }
 
-    // Sync referrals (with visits expand for fraud detection)
-    const referrals = dedupe(await fetchRecent('/referrals?expand[]=visits&expand[]=customer'));
+    // Sync referrals. Rewardful only supports expand[]=affiliate; customer comes via webhook.
+    const referrals = dedupe(await fetchRecent('/referrals'));
     for (const r of referrals) {
       const linkId = (r.link as { id?: string })?.id ?? null;
       const linkToken = (r.link as { token?: string })?.token ?? null;

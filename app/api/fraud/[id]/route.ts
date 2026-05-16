@@ -14,7 +14,7 @@ export async function GET(
 ) {
   const { id } = await context.params;
 
-  const [affiliate, referralsRaw, links, commissionStats, visitorOverlap, customerOverlap] = await Promise.all([
+  const [affiliate, referralsRaw, links, commissionStats, visitorOverlap, customerOverlap, dupCountResult, signupClusterResult] = await Promise.all([
     sql`
       SELECT
         rewardful_id, first_name, last_name, email, status, created_at,
@@ -70,6 +70,25 @@ export async function GET(
           GROUP BY LOWER(customer_email) HAVING COUNT(DISTINCT affiliate_id) > 1
         )
     `,
+    // Duplicate-name count: other affiliates with same first+last name
+    sql`
+      WITH me AS (
+        SELECT LOWER(TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, ''))) AS name_key
+        FROM affiliates WHERE rewardful_id = ${id}
+      )
+      SELECT COUNT(*) AS cnt
+      FROM affiliates a, me
+      WHERE LOWER(TRIM(COALESCE(a.first_name, '') || ' ' || COALESCE(a.last_name, ''))) = me.name_key
+        AND a.rewardful_id != ${id}
+        AND me.name_key != ''
+    `,
+    // Signup-time cluster: minutes to nearest other affiliate
+    sql`
+      WITH me AS (SELECT created_at FROM affiliates WHERE rewardful_id = ${id})
+      SELECT MIN(ABS(EXTRACT(EPOCH FROM (a.created_at - me.created_at)) / 60)) AS minutes
+      FROM affiliates a, me
+      WHERE a.rewardful_id != ${id} AND a.status != 'deleted'
+    `,
   ]);
   const referrals = referralsRaw as unknown as ReferralRow[];
 
@@ -99,6 +118,9 @@ export async function GET(
       shared_visitor_count: Number(visitorOverlap[0]?.cnt ?? 0),
       shared_customer_count: Number(customerOverlap[0]?.cnt ?? 0),
     },
+    duplicateNameCount: Number(dupCountResult[0]?.cnt ?? 0),
+    signupClusterMinutes: signupClusterResult[0]?.minutes !== undefined && signupClusterResult[0].minutes !== null
+      ? Number(signupClusterResult[0].minutes) : null,
   });
 
   // Build top referrers / landing pages distribution

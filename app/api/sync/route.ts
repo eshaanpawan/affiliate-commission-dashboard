@@ -94,8 +94,10 @@ export async function POST() {
       }
     }
 
-    // Sync referrals (last 48h) — expand visits to capture referrer/UTM/gclid for fraud detection
-    const referrals = await fetchRecent('/referrals?expand[]=visits&expand[]=customer', cutoff);
+    // Sync referrals (last 48h). NOTE: Rewardful only supports expand[]=affiliate on
+    // the list endpoint — customer/visits cannot be expanded here. We get those via
+    // webhooks (real-time) or individual /referrals/{id} fetches for suspects.
+    const referrals = await fetchRecent('/referrals', cutoff);
     if (referrals.length > 0) {
       for (const batch of chunks(referrals, 100)) {
         const rows = batch.map((r) => {

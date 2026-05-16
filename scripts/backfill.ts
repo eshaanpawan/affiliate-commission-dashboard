@@ -309,8 +309,8 @@ async function main() {
   const linkMap = await buildLinkMap();
   console.log(`→ Built map with ${linkMap.size} links\n`);
 
-  console.log('Fetching referrals (all time, with visits)...');
-  const referrals = await fetchAll('/referrals?expand[]=visits&expand[]=customer', ALL_TIME_DATE);
+  console.log('Fetching referrals (all time)...');
+  const referrals = await fetchAll('/referrals', ALL_TIME_DATE);
   console.log(`→ Inserting ${referrals.length} referrals into DB...`);
   await backfillReferrals(referrals as never[], linkMap);
   console.log('✅ Referrals done\n');

@@ -31,6 +31,13 @@ interface AffiliateRisk {
     selfReferralCount: number;
     sharedVisitorCount: number;
     sharedCustomerCount: number;
+    maxDailyRefs: number;
+    activeDays: number;
+    burstConcentration: number;
+    superFastConvCount: number;
+    ttcStddevSec: number | null;
+    duplicateNameCount: number;
+    signupClusterMinutes: number | null;
   };
 }
 
@@ -61,6 +68,9 @@ interface FraudListResponse {
     affiliatesWithSelfReferral: number;
     affiliatesWithSharedCustomers: number;
     affiliatesWithHighRefundRate: number;
+    affiliatesWithDuplicateName: number;
+    affiliatesWithBurstPattern: number;
+    affiliatesWithSuperFastConv: number;
   };
   affiliates: FraudAffiliate[];
 }
@@ -470,21 +480,36 @@ export default function FraudPage() {
               </div>
             </div>
             {/* Cross-affiliate / refund / self-referral anomaly summary */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                <p className="text-xs font-semibold text-red-700">Self-referral matches</p>
-                <p className="text-2xl font-bold text-red-700 mt-1">{data.summary.affiliatesWithSelfReferral}</p>
-                <p className="text-xs text-red-600/70 mt-0.5">Affiliates whose own email matches a customer email</p>
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                <p className="text-xs font-semibold text-red-700">Self-referral</p>
+                <p className="text-xl font-bold text-red-700 mt-1">{data.summary.affiliatesWithSelfReferral}</p>
+                <p className="text-[11px] text-red-600/70 mt-0.5">Own email = customer</p>
               </div>
-              <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
-                <p className="text-xs font-semibold text-orange-700">Cross-affiliate customer overlap</p>
-                <p className="text-2xl font-bold text-orange-700 mt-1">{data.summary.affiliatesWithSharedCustomers}</p>
-                <p className="text-xs text-orange-600/70 mt-0.5">Affiliates with customer emails also seen under another affiliate</p>
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                <p className="text-xs font-semibold text-red-700">Conv &lt;60s</p>
+                <p className="text-xl font-bold text-red-700 mt-1">{data.summary.affiliatesWithSuperFastConv}</p>
+                <p className="text-[11px] text-red-600/70 mt-0.5">Super-fast conversions</p>
               </div>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-                <p className="text-xs font-semibold text-amber-700">High refund rate</p>
-                <p className="text-2xl font-bold text-amber-700 mt-1">{data.summary.affiliatesWithHighRefundRate}</p>
-                <p className="text-xs text-amber-600/70 mt-0.5">Affiliates with ≥15% refunded/voided commissions</p>
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
+                <p className="text-xs font-semibold text-orange-700">Duplicate names</p>
+                <p className="text-xl font-bold text-orange-700 mt-1">{data.summary.affiliatesWithDuplicateName}</p>
+                <p className="text-[11px] text-orange-600/70 mt-0.5">Same name, multiple accounts</p>
+              </div>
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
+                <p className="text-xs font-semibold text-orange-700">Shared customers</p>
+                <p className="text-xl font-bold text-orange-700 mt-1">{data.summary.affiliatesWithSharedCustomers}</p>
+                <p className="text-[11px] text-orange-600/70 mt-0.5">Customer under multiple affs</p>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                <p className="text-xs font-semibold text-amber-700">Burst pattern</p>
+                <p className="text-xl font-bold text-amber-700 mt-1">{data.summary.affiliatesWithBurstPattern}</p>
+                <p className="text-[11px] text-amber-600/70 mt-0.5">≥70% refs in single day</p>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                <p className="text-xs font-semibold text-amber-700">High refund</p>
+                <p className="text-xl font-bold text-amber-700 mt-1">{data.summary.affiliatesWithHighRefundRate}</p>
+                <p className="text-[11px] text-amber-600/70 mt-0.5">≥15% voided commissions</p>
               </div>
             </div>
           </>

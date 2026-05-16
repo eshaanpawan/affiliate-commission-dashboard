@@ -59,6 +59,10 @@ export interface AffiliateRiskInput {
   affiliate?: AffiliateContext;
   refunds?: RefundContext;
   crossAffiliate?: CrossAffiliateContext;
+  // Number of OTHER affiliates with the same first+last name (duplicate accounts ring)
+  duplicateNameCount?: number;
+  // Whether this affiliate signed up within 1 hour of another affiliate
+  signupClusterMinutes?: number | null;
 }
 
 export interface RiskSignal {
@@ -90,6 +94,13 @@ export interface AffiliateRisk {
     selfReferralCount: number;
     sharedVisitorCount: number;
     sharedCustomerCount: number;
+    maxDailyRefs: number;
+    activeDays: number;
+    burstConcentration: number;     // % of all refs in single biggest day
+    superFastConvCount: number;     // conversions in <60s
+    ttcStddevSec: number | null;
+    duplicateNameCount: number;
+    signupClusterMinutes: number | null;
   };
 }
 
@@ -180,6 +191,13 @@ function median(nums: number[]): number | null {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+function stddev(nums: number[]): number | null {
+  if (nums.length < 2) return null;
+  const m = nums.reduce((a, b) => a + b, 0) / nums.length;
+  const v = nums.reduce((a, b) => a + (b - m) ** 2, 0) / (nums.length - 1);
+  return Math.sqrt(v);
+}
+
 export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
   const refs = input.referrals;
   const n = refs.length;
@@ -199,6 +217,7 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
   // Time-to-conversion (only for converted referrals with both timestamps)
   const ttcSecs: number[] = [];
   let instantCount = 0;
+  let superFastCount = 0;
   for (const r of convs) {
     if (!r.created_at || !r.converted_at) continue;
     const start = new Date(r.created_at).getTime();
@@ -207,9 +226,25 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
     const secs = (end - start) / 1000;
     ttcSecs.push(secs);
     if (secs < 300) instantCount++;
+    if (secs < 60) superFastCount++;
   }
   const instantConvPct = convs.length > 0 ? instantCount / convs.length : 0;
   const medianTimeToConvSec = median(ttcSecs);
+  const ttcStddevSec = stddev(ttcSecs);
+
+  // Burst pattern: referrals concentrated in few days = fake-traffic / coupon-extension
+  const dayCounts = new Map<string, number>();
+  for (const r of refs) {
+    if (!r.created_at) continue;
+    const day = String(r.created_at).slice(0, 10);
+    dayCounts.set(day, (dayCounts.get(day) ?? 0) + 1);
+  }
+  const activeDays = dayCounts.size;
+  const maxDailyRefs = Math.max(0, ...dayCounts.values());
+  const burstConcentration = n > 0 ? maxDailyRefs / n : 0;
+
+  const duplicateNameCount = input.duplicateNameCount ?? 0;
+  const signupClusterMinutes = input.signupClusterMinutes ?? null;
 
   // Source concentration
   const sourceCounts = new Map<string, number>();
@@ -381,6 +416,60 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
       detail: `${sharedCustomerCount} of this affiliate's customer emails were also referred by another affiliate. Strong indicator of attribution theft (e.g. browser extension sniping last-click) or coordinated fraud.`,
     });
   }
+  if (superFastCount >= 2) {
+    signals.push({
+      key: 'super_fast_conversion',
+      label: 'Conversions in <60 seconds',
+      severity: 'high',
+      value: `${superFastCount} conv(s)`,
+      detail: `${superFastCount} conversions happened within 60 seconds of first click. That's near-instant — either the visitor was already mid-checkout when the affiliate link fired, or this is automated self-referral.`,
+    });
+  }
+  if (ttcStddevSec !== null && medianTimeToConvSec !== null && convs.length >= 4 && ttcStddevSec < medianTimeToConvSec * 0.3 && medianTimeToConvSec < 600) {
+    signals.push({
+      key: 'narrow_ttc',
+      label: 'Narrow time-to-conversion distribution',
+      severity: 'medium',
+      value: `median ${medianTimeToConvSec.toFixed(0)}s ±${ttcStddevSec.toFixed(0)}s`,
+      detail: `Conversions cluster tightly around ${medianTimeToConvSec.toFixed(0)}s with low variance. Real organic conversions vary widely (minutes to days). Tight clustering = automated or coordinated.`,
+    });
+  }
+  if (burstConcentration >= 0.7 && n >= 10) {
+    signals.push({
+      key: 'burst_pattern',
+      label: 'Burst referral pattern',
+      severity: burstConcentration >= 0.9 ? 'high' : 'medium',
+      value: `${(burstConcentration * 100).toFixed(0)}% in 1 day`,
+      detail: `${maxDailyRefs} of ${n} referrals (${(burstConcentration * 100).toFixed(0)}%) all came from a single day. Real content sites have steady daily traffic — bursts indicate paid-ad campaigns or click-farm activity.`,
+    });
+  }
+  if (n >= 1000 && activeDays > 0 && (n / activeDays) >= 200) {
+    signals.push({
+      key: 'high_volume_low_quality',
+      label: 'High-volume low-conversion traffic',
+      severity: convRate < 0.01 ? 'high' : 'medium',
+      value: `${n.toLocaleString()} refs, ${(convRate * 100).toFixed(2)}% conv`,
+      detail: `${n.toLocaleString()} referrals across ${activeDays} days (~${Math.round(n / activeDays)}/day avg) with ${(convRate * 100).toFixed(2)}% conversion. Real content affiliates rarely sustain >100 daily clicks with <1% conversion — this looks like click-farm or fake-traffic noise.`,
+    });
+  }
+  if (duplicateNameCount > 0) {
+    signals.push({
+      key: 'duplicate_name',
+      label: 'Duplicate-name account',
+      severity: duplicateNameCount >= 2 ? 'high' : 'medium',
+      value: `${duplicateNameCount + 1} accounts`,
+      detail: `${duplicateNameCount + 1} affiliates share the exact first+last name as this one. Multi-account ring pattern — same person creating accounts to distribute fraud below per-affiliate thresholds.`,
+    });
+  }
+  if (signupClusterMinutes !== null && signupClusterMinutes < 60) {
+    signals.push({
+      key: 'signup_cluster',
+      label: 'Signed up adjacent to another suspect',
+      severity: signupClusterMinutes < 15 ? 'high' : 'medium',
+      value: `${signupClusterMinutes.toFixed(0)} min`,
+      detail: `Account was created within ${signupClusterMinutes.toFixed(0)} minutes of another affiliate. Coordinated mass-signup pattern.`,
+    });
+  }
 
   // Compose risk score 0-100
   let score = 0;
@@ -399,6 +488,19 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
   if (refundRate >= 0.15 && totalCommissions >= 3) score += Math.min(25, refundRate * 50);
   if (sharedCustomerCount > 0) score += Math.min(25, sharedCustomerCount * 8);
   if (sharedVisitorCount > 0) score += Math.min(15, sharedVisitorCount * 3);
+
+  // New behavioral signals (work without URL data — primary detection at SaaS scale)
+  if (superFastCount >= 2) score += 25;
+  else if (superFastCount === 1) score += 10;
+  if (ttcStddevSec !== null && medianTimeToConvSec !== null && convs.length >= 4
+      && ttcStddevSec < medianTimeToConvSec * 0.3 && medianTimeToConvSec < 600) score += 15;
+  if (burstConcentration >= 0.7 && n >= 10) score += Math.min(15, burstConcentration * 15);
+  if (n >= 1000 && activeDays > 0 && (n / activeDays) >= 200 && convRate < 0.01) score += 20;
+  if (duplicateNameCount >= 2) score += 25;
+  else if (duplicateNameCount === 1) score += 15;
+  if (signupClusterMinutes !== null && signupClusterMinutes < 15) score += 15;
+  else if (signupClusterMinutes !== null && signupClusterMinutes < 60) score += 8;
+
   score = Math.max(0, Math.min(100, Math.round(score)));
 
   const band: 'low' | 'medium' | 'high' = score >= 60 ? 'high' : score >= 30 ? 'medium' : 'low';
@@ -424,6 +526,13 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
       selfReferralCount,
       sharedVisitorCount,
       sharedCustomerCount,
+      maxDailyRefs,
+      activeDays,
+      burstConcentration,
+      superFastConvCount: superFastCount,
+      ttcStddevSec,
+      duplicateNameCount,
+      signupClusterMinutes,
     },
   };
 }

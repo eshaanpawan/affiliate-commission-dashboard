@@ -36,6 +36,12 @@ interface OverlapRow {
   shared_customer_count: number;
 }
 
+interface NameKeyRow {
+  rewardful_id: string;
+  name_key: string;
+  created_at: string;
+}
+
 export async function GET() {
   const [
     affiliatesRaw,
@@ -43,6 +49,7 @@ export async function GET() {
     commissionStatsRaw,
     visitorOverlapRaw,
     customerOverlapRaw,
+    nameKeyRaw,
   ] = await Promise.all([
     sql`
       SELECT
@@ -113,6 +120,14 @@ export async function GET() {
       WHERE r.affiliate_id IS NOT NULL
       GROUP BY r.affiliate_id
     `,
+    // Name keys for duplicate-name + signup-time clustering
+    sql`
+      SELECT rewardful_id, created_at,
+             LOWER(TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, ''))) AS name_key
+      FROM affiliates
+      WHERE status != 'deleted'
+        AND (first_name IS NOT NULL OR last_name IS NOT NULL)
+    `,
   ]);
 
   const affiliates = affiliatesRaw as unknown as AffiliateRow[];
@@ -120,6 +135,41 @@ export async function GET() {
   const commissionStats = commissionStatsRaw as unknown as CommissionStatRow[];
   const visitorOverlap = visitorOverlapRaw as unknown as OverlapRow[];
   const customerOverlap = customerOverlapRaw as unknown as OverlapRow[];
+  const nameKeys = nameKeyRaw as unknown as NameKeyRow[];
+
+  // Duplicate-name index: how many OTHER affiliates share this name_key
+  const nameToIds = new Map<string, string[]>();
+  for (const n of nameKeys) {
+    if (!n.name_key) continue;
+    const list = nameToIds.get(n.name_key) ?? [];
+    list.push(n.rewardful_id);
+    nameToIds.set(n.name_key, list);
+  }
+  const dupCountById = new Map<string, number>();
+  for (const n of nameKeys) {
+    if (!n.name_key) continue;
+    const others = nameToIds.get(n.name_key) ?? [];
+    dupCountById.set(n.rewardful_id, Math.max(0, others.length - 1));
+  }
+
+  // Signup-time cluster: minutes to nearest other affiliate (any direction)
+  const sortedByTime = [...nameKeys].sort((a, b) =>
+    new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+  const nearestMinutesById = new Map<string, number | null>();
+  for (let i = 0; i < sortedByTime.length; i++) {
+    const me = sortedByTime[i];
+    let nearest: number | null = null;
+    if (i > 0) {
+      const dPrev = (new Date(me.created_at).getTime() - new Date(sortedByTime[i - 1].created_at).getTime()) / 60000;
+      nearest = dPrev;
+    }
+    if (i < sortedByTime.length - 1) {
+      const dNext = (new Date(sortedByTime[i + 1].created_at).getTime() - new Date(me.created_at).getTime()) / 60000;
+      if (nearest === null || dNext < nearest) nearest = dNext;
+    }
+    nearestMinutesById.set(me.rewardful_id, nearest);
+  }
 
   // Group referrals by affiliate
   const byAffiliate = new Map<string, ReferralSignalRow[]>();
@@ -156,6 +206,8 @@ export async function GET() {
         shared_visitor_count: visitorOverlapMap.get(a.rewardful_id) ?? 0,
         shared_customer_count: customerOverlapMap.get(a.rewardful_id) ?? 0,
       },
+      duplicateNameCount: dupCountById.get(a.rewardful_id) ?? 0,
+      signupClusterMinutes: nearestMinutesById.get(a.rewardful_id) ?? null,
     });
     return {
       id: a.rewardful_id,
@@ -196,6 +248,9 @@ export async function GET() {
     affiliatesWithSelfReferral: enriched.filter(e => e.risk.stats.selfReferralCount > 0).length,
     affiliatesWithSharedCustomers: enriched.filter(e => e.risk.stats.sharedCustomerCount > 0).length,
     affiliatesWithHighRefundRate: enriched.filter(e => e.risk.stats.refundRate >= 0.15).length,
+    affiliatesWithDuplicateName: enriched.filter(e => e.risk.stats.duplicateNameCount > 0).length,
+    affiliatesWithBurstPattern: enriched.filter(e => e.risk.stats.burstConcentration >= 0.7 && e.referrals >= 10).length,
+    affiliatesWithSuperFastConv: enriched.filter(e => e.risk.stats.superFastConvCount > 0).length,
   };
 
   return NextResponse.json({ summary, affiliates: enriched });
