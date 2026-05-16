@@ -127,3 +127,19 @@ Clicking an affiliate row calls `GET /api/affiliates/[id]` for their individual 
 - **Conversion definition:** Rewardful `conversion_state = 'conversion'` ↔ PostHog `subscription_updated` with `properties.isUserFirstPaidPlan = true`.
 - **Period filter scope:** `?period=` only affects the 8 overview metric cards. All charts, tables, leaderboard, and country breakdowns always show all-time data.
 - **Re-run country backfill:** `npx tsx scripts/backfill-customer-emails.ts` — safe to re-run, only fills rows where `country_code IS NULL`.
+- **Prod migrations**: `/api/admin/migrate` (POST, `Authorization: Bearer $CRON_SECRET`) runs all `ALTER TABLE IF NOT EXISTS` statements idempotently. Trigger via `vercel env run -e production -- bash -c 'vercel curl /api/admin/migrate -- --request POST --header "Authorization: Bearer $CRON_SECRET"'`.
+
+## Fraud detection
+
+`/fraud` page + `/api/fraud` route scores affiliates 0-100 across signals:
+- **Brand-bidding signals** (referral data): `gclid`, `fbclid`, `utm_medium=cpc`, google.com referrer, brand term in utm_term/landing
+- **Behavioral signals**: instant conversion (<5min), abnormal conv rate (>40%), single-source concentration (>85%)
+- **Self-referral signals**: customer_email matches affiliate.email exact / Gmail-alias / business-domain
+- **Refund-rate signal**: voided+refunded commissions ≥15% of total
+- **Cross-affiliate overlap**: visitor_id or customer_email seen under multiple affiliates
+
+Scoring weights live in [lib/fraud-detection.ts](lib/fraud-detection.ts). Exact self-referral = +60 (near-certain fraud). Bands: 0-30 low / 30-60 medium / 60+ high.
+
+**Hold period**: configure in Rewardful dashboard → delay payouts 30 days. The `sale.refunded` webhook now cascades to `commission.voided` in the DB so clawbacks reflect immediately without waiting for the next sync.
+
+**Manual review flow**: click any affiliate row in `/fraud` → modal shows signals, top referrers, recent referrals with per-row flags, Google search shortcuts (`runable {name}`, find affiliate funnel, `via={token}`). Flag / Pause / Clear / Reset buttons write to `affiliates.review_status` via POST `/api/affiliates/[id]/review`.
