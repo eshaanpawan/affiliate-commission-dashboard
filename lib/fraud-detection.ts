@@ -461,13 +461,15 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
       detail: `${duplicateNameCount + 1} affiliates share the exact first+last name as this one. Multi-account ring pattern — same person creating accounts to distribute fraud below per-affiliate thresholds.`,
     });
   }
-  if (signupClusterMinutes !== null && signupClusterMinutes < 60) {
+  // Signup-cluster: only fire on genuinely tight gaps (<10 min). 60-min was too loose
+  // for a ~1500-affiliate program where average signup interval is ~30 min organically.
+  if (signupClusterMinutes !== null && signupClusterMinutes < 10) {
     signals.push({
       key: 'signup_cluster',
-      label: 'Signed up adjacent to another suspect',
-      severity: signupClusterMinutes < 15 ? 'high' : 'medium',
-      value: `${signupClusterMinutes.toFixed(0)} min`,
-      detail: `Account was created within ${signupClusterMinutes.toFixed(0)} minutes of another affiliate. Coordinated mass-signup pattern.`,
+      label: 'Signed up adjacent to another affiliate',
+      severity: signupClusterMinutes < 2 ? 'high' : 'medium',
+      value: `${signupClusterMinutes.toFixed(1)} min`,
+      detail: `Account was created within ${signupClusterMinutes.toFixed(1)} minutes of another affiliate. Tight clustering suggests coordinated mass-signup.`,
     });
   }
 
@@ -498,8 +500,8 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
   if (n >= 1000 && activeDays > 0 && (n / activeDays) >= 200 && convRate < 0.01) score += 20;
   if (duplicateNameCount >= 2) score += 25;
   else if (duplicateNameCount === 1) score += 15;
-  if (signupClusterMinutes !== null && signupClusterMinutes < 15) score += 15;
-  else if (signupClusterMinutes !== null && signupClusterMinutes < 60) score += 8;
+  if (signupClusterMinutes !== null && signupClusterMinutes < 2) score += 15;
+  else if (signupClusterMinutes !== null && signupClusterMinutes < 10) score += 5;
 
   score = Math.max(0, Math.min(100, Math.round(score)));
 

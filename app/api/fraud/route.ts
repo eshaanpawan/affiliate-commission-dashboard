@@ -120,13 +120,15 @@ export async function GET() {
       WHERE r.affiliate_id IS NOT NULL
       GROUP BY r.affiliate_id
     `,
-    // Name keys for duplicate-name + signup-time clustering
+    // Name keys for duplicate-name + signup-time clustering.
+    // Require BOTH first AND last name to be present (single-word names cluster too loosely).
     sql`
       SELECT rewardful_id, created_at,
-             LOWER(TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, ''))) AS name_key
+             LOWER(TRIM(first_name || ' ' || last_name)) AS name_key
       FROM affiliates
       WHERE status != 'deleted'
-        AND (first_name IS NOT NULL OR last_name IS NOT NULL)
+        AND first_name IS NOT NULL AND last_name IS NOT NULL
+        AND LENGTH(TRIM(first_name)) >= 2 AND LENGTH(TRIM(last_name)) >= 2
     `,
   ]);
 
