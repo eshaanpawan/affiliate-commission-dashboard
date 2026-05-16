@@ -1,6 +1,15 @@
 # Affiliate Fraud Findings — 2026-05-16
 
-**Investigation scope**: All 1,469 affiliates with ≥3 referrals (300 qualifying), 80,355 referrals, 1,524 conversions, $17K unpaid commissions.
+**Investigation scope**: All 1,469 affiliates with ≥3 referrals (578 qualifying for /fraud dashboard), 80,355+ referrals, 1,524 conversions, $17K unpaid commissions.
+
+**Final detection state** (after deploy):
+- 1 high-risk · 13 medium-risk · 564 low-risk
+- 28 affiliates with duplicate names
+- 24 affiliates with burst-pattern traffic (≥70% in single day)
+- 5 affiliates with super-fast conversions (<60s)
+- **19 zero-conversion mega-traffic affiliates** (≥500 refs, 0 conversions ever)
+- ~$2,800 unpaid concentrated in the top 30 suspects of /fraud dashboard
+- Additional ~$5,000 unpaid in Vietnamese-cluster affiliates not flagged by automated rules (low conv rate is "realistic" for content, but volume + identity patterns are not)
 
 ---
 
@@ -115,6 +124,27 @@ Most likely fraud rings or honest mistakes. Worth a single-pass review:
 - Ashish B: `ashish@getrunable.com` + `ashish@runable.com` — looks like an employee with both addresses. Worth confirming with Ashish.
 
 ---
+
+## Tier 3 — Zero-conversion fake-traffic operators (no commission to claw back, but ban for noise)
+
+19 affiliates have generated ≥500 referrals each with **zero conversions** ever. They're not earning commission, but they're consuming Rewardful tracking quota and adding signal noise:
+
+| Affiliate | Email | Refs | Active days | Max daily | Window |
+|---|---|---|---|---|---|
+| **Mario Ilardo** | marko2280@gmail.com (`?via=zentrabyte`) | **87,208** | 22 | 282 | Apr 18 – May 14 |
+| Hoàng Huy Đăng | macheda120489@gmail.com | 11,661 | 23 | 243 | Mar 9 – May 8 |
+| Chris LaBonty | chris@affiliate.watch | 9,589 | 43 | 15 | Mar 16 – May 14 — *legitimate-looking domain; may be testing* |
+| Leslie Taylor | leslietaylor1927@gmail.com | 7,446 | 6 | 417 | May 5 – May 10 — *burst* |
+| Duyen Truong | duyentruongth2002@gmail.com | 7,061 | 23 | 221 | Jan 7 – Mar 23 |
+| William Nelson | fxcommllc@gmail.com | 5,096 | 8 | 214 | Apr 14 – Apr 24 |
+| Anubhav Dubey | anubhavd008@gmail.com | 2,470 | 13 | 44 | Mar 22 – May 14 |
+| binh 10 | top10binhduong247@gmail.com | 1,284 | 12 | 39 | Apr 20 – May 13 |
+| jordan bharrod | sev.09506151@gmail.com | 1,225 | 25 | 6 | Apr 1 – May 12 |
+| + 10 more | | 500-1200 each | | | |
+
+**Total: ~140,000 fake/unconvertible referrals.** Mario Ilardo alone has nearly 90K. These are almost certainly bot networks or ad arbitrage — banning costs $0 (no commission at risk) and immediately cuts ~10% of your "referrals" metric noise.
+
+**Action**: Mass-pause all 19 affiliates with `status=active` and ≥500 refs / 0 conversions, except verify `chris@affiliate.watch` first (likely legitimate, affiliate.watch is a real industry blog).
 
 ## Patterns identified
 
