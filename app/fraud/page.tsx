@@ -49,11 +49,38 @@ interface FraudAffiliate {
   reviewStatus: 'unreviewed' | 'flagged' | 'cleared' | 'paused';
   reviewNotes: string | null;
   knownUrl: string | null;
+  fraudTags: string[];
+  linkToken: string | null;
   unpaidCommissionCents: number;
   paidCommissionCents: number;
   referrals: number;
   conversions: number;
   risk: AffiliateRisk;
+}
+
+const FRAUD_TAG_OPTIONS: { key: string; label: string; emoji: string }[] = [
+  { key: 'brand_bidding', label: 'Brand bidding', emoji: '🎯' },
+  { key: 'self_referral', label: 'Self-referral', emoji: '🪞' },
+  { key: 'fake_traffic', label: 'Fake traffic', emoji: '🤖' },
+  { key: 'duplicate_account', label: 'Duplicate account', emoji: '👥' },
+  { key: 'identity_mismatch', label: 'Identity mismatch', emoji: '🆔' },
+  { key: 'coupon_sniping', label: 'Coupon sniping', emoji: '🍯' },
+  { key: 'click_farm', label: 'Click farm', emoji: '🚜' },
+  { key: 'low_quality', label: 'Low quality', emoji: '📉' },
+  { key: 'manual_review', label: 'Needs review', emoji: '🔍' },
+  { key: 'verified_legit', label: 'Verified legit', emoji: '✓' },
+];
+
+function FraudTagPill({ tag }: { tag: string }) {
+  const opt = FRAUD_TAG_OPTIONS.find(o => o.key === tag);
+  const cls = tag === 'verified_legit'
+    ? 'bg-emerald-50 text-emerald-700'
+    : 'bg-red-50 text-red-700';
+  return (
+    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${cls}`}>
+      {opt?.emoji ?? '🚩'} {opt?.label ?? tag.replace(/_/g, ' ')}
+    </span>
+  );
 }
 
 interface FraudListResponse {
@@ -71,6 +98,8 @@ interface FraudListResponse {
     affiliatesWithDuplicateName: number;
     affiliatesWithBurstPattern: number;
     affiliatesWithSuperFastConv: number;
+    affiliatesTaggedBrandBidding: number;
+    affiliatesTaggedAnyFraud: number;
   };
   affiliates: FraudAffiliate[];
 }
@@ -147,6 +176,7 @@ function FraudModal({ affiliate, onClose, onReviewUpdate }: {
   const [loading, setLoading] = useState(true);
   const [notes, setNotes] = useState(affiliate.reviewNotes ?? '');
   const [knownUrl, setKnownUrl] = useState(affiliate.knownUrl ?? '');
+  const [tags, setTags] = useState<string[]>(affiliate.fraudTags ?? []);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -156,19 +186,39 @@ function FraudModal({ affiliate, onClose, onReviewUpdate }: {
       .catch(() => setLoading(false));
   }, [affiliate.id]);
 
-  async function setStatus(reviewStatus: 'flagged' | 'cleared' | 'paused' | 'unreviewed') {
+  async function saveAll(patch: { reviewStatus?: 'flagged' | 'cleared' | 'paused' | 'unreviewed'; tags?: string[] }) {
     setSaving(true);
     try {
+      const body: Record<string, unknown> = { reviewNotes: notes, knownUrl };
+      if (patch.reviewStatus !== undefined) body.reviewStatus = patch.reviewStatus;
+      if (patch.tags !== undefined) body.fraudTags = patch.tags;
       const res = await fetch(`/api/affiliates/${affiliate.id}/review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reviewStatus, reviewNotes: notes, knownUrl }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
-      if (json.ok) onReviewUpdate(affiliate.id, { reviewStatus, reviewNotes: notes, knownUrl });
+      if (json.ok) {
+        onReviewUpdate(affiliate.id, {
+          reviewNotes: notes,
+          knownUrl,
+          ...(patch.reviewStatus !== undefined ? { reviewStatus: patch.reviewStatus } : {}),
+          ...(patch.tags !== undefined ? { fraudTags: patch.tags } : {}),
+        });
+      }
     } finally {
       setSaving(false);
     }
+  }
+
+  function setStatus(reviewStatus: 'flagged' | 'cleared' | 'paused' | 'unreviewed') {
+    return saveAll({ reviewStatus });
+  }
+
+  function toggleTag(tagKey: string) {
+    const next = tags.includes(tagKey) ? tags.filter(t => t !== tagKey) : [...tags, tagKey];
+    setTags(next);
+    saveAll({ tags: next });
   }
 
   return (
@@ -353,6 +403,29 @@ function FraudModal({ affiliate, onClose, onReviewUpdate }: {
 
         {/* Review controls */}
         <div className="border-t border-gray-200 pt-4">
+          <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Tag fraud type</h3>
+          <p className="text-xs text-gray-400 mb-2">Click to toggle. Tags save automatically.</p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {FRAUD_TAG_OPTIONS.map((opt) => {
+              const active = tags.includes(opt.key);
+              const isPositive = opt.key === 'verified_legit';
+              const activeCls = isPositive
+                ? 'bg-emerald-600 text-white border-emerald-600'
+                : 'bg-red-600 text-white border-red-600';
+              const inactiveCls = 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50';
+              return (
+                <button
+                  key={opt.key}
+                  disabled={saving}
+                  onClick={() => toggleTag(opt.key)}
+                  className={`text-xs px-2.5 py-1 rounded-md border font-medium transition-colors disabled:opacity-50 ${active ? activeCls : inactiveCls}`}
+                >
+                  {opt.emoji} {opt.label}
+                </button>
+              );
+            })}
+          </div>
+
           <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Manual review</h3>
           <div className="mb-3">
             <label className="text-xs text-gray-500 mb-1 block">Known affiliate URL (their site/channel/funnel)</label>
@@ -387,7 +460,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: 'da
   );
 }
 
-type FilterKey = 'all' | 'high' | 'medium' | 'unreviewed' | 'flagged';
+type FilterKey = 'all' | 'high' | 'medium' | 'unreviewed' | 'flagged' | 'tagged' | 'brand_bidding';
 
 export default function FraudPage() {
   const [data, setData] = useState<FraudListResponse | null>(null);
@@ -416,9 +489,12 @@ export default function FraudPage() {
       if (filter === 'medium' && a.risk.band !== 'medium') return false;
       if (filter === 'unreviewed' && a.reviewStatus !== 'unreviewed') return false;
       if (filter === 'flagged' && a.reviewStatus !== 'flagged') return false;
+      if (filter === 'tagged' && a.fraudTags.length === 0) return false;
+      if (filter === 'brand_bidding' && !a.fraudTags.includes('brand_bidding')) return false;
       if (search) {
         const q = search.toLowerCase();
-        if (!a.name.toLowerCase().includes(q) && !(a.email?.toLowerCase().includes(q))) return false;
+        const tokenMatch = a.linkToken?.toLowerCase().includes(q) ?? false;
+        if (!a.name.toLowerCase().includes(q) && !(a.email?.toLowerCase().includes(q)) && !tokenMatch) return false;
       }
       return true;
     });
@@ -517,13 +593,13 @@ export default function FraudPage() {
 
         {/* Filters */}
         <div className="flex flex-wrap gap-2 items-center mb-4">
-          {(['high', 'medium', 'unreviewed', 'flagged', 'all'] as FilterKey[]).map((f) => (
+          {(['high', 'medium', 'unreviewed', 'flagged', 'tagged', 'brand_bidding', 'all'] as FilterKey[]).map((f) => (
             <button key={f} onClick={() => setFilter(f)}
                     className={`text-xs px-3 py-1.5 rounded-md font-medium ${filter === f ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
-              {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
+              {f === 'all' ? 'All' : f === 'brand_bidding' ? '🎯 Brand bidding' : f === 'tagged' ? '🏷 Any tag' : f.charAt(0).toUpperCase() + f.slice(1)}
             </button>
           ))}
-          <input type="text" placeholder="Search name or email…" value={search} onChange={(e) => setSearch(e.target.value)}
+          <input type="text" placeholder="Search name, email, or via=token…" value={search} onChange={(e) => setSearch(e.target.value)}
                  className="ml-auto px-3 py-1.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-indigo-400 w-64" />
         </div>
 
@@ -555,6 +631,21 @@ export default function FraudPage() {
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900">{a.name}</p>
                       <p className="text-xs text-gray-400">{a.email}</p>
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        {a.linkToken && (
+                          <a
+                            href={`https://runable.com/?via=${a.linkToken}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                            title="Open affiliate funnel"
+                          >
+                            ?via={a.linkToken}
+                          </a>
+                        )}
+                        {a.fraudTags.length > 0 && a.fraudTags.map((t) => <FraudTagPill key={t} tag={t} />)}
+                      </div>
                     </td>
                     <td className="px-3 py-3 text-right">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold border ${bandColor(a.risk.band)}`}>{a.risk.score}</span>

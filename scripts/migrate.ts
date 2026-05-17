@@ -87,6 +87,7 @@ async function migrate() {
   await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS risk_score INT`;
   await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS risk_signals JSONB`;
   await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS risk_updated_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS fraud_tags JSONB DEFAULT '[]'::jsonb`;
 
   await sql`CREATE INDEX IF NOT EXISTS idx_referrals_affiliate_id ON referrals (affiliate_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_referrals_created_at ON referrals (created_at)`;

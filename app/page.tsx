@@ -28,6 +28,8 @@ interface Affiliate {
   conversionsToday: number;
   revenueCents: number;
   commissionCents: number;
+  linkToken: string | null;
+  fraudTags: string[];
 }
 
 interface DashboardData {
@@ -611,6 +613,25 @@ export default function Dashboard() {
                       <td className="px-5 py-3">
                         <p className="font-medium text-gray-900">{a.name}</p>
                         <p className="text-xs text-gray-400">{a.email}</p>
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          {a.linkToken && (
+                            <a
+                              href={`https://runable.com/?via=${a.linkToken}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                              title="Open affiliate funnel"
+                            >
+                              ?via={a.linkToken}
+                            </a>
+                          )}
+                          {a.fraudTags.length > 0 && a.fraudTags.map((t) => (
+                            <span key={t} className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-50 text-red-700">
+                              🚩 {t.replace(/_/g, ' ')}
+                            </span>
+                          ))}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-right text-gray-700">{a.referrals}</td>
                       <td className="px-4 py-3 text-right font-semibold text-indigo-600">{a.referralsToday}</td>

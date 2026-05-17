@@ -13,10 +13,12 @@ interface AffiliateRow {
   review_notes: string | null;
   reviewed_at: string | null;
   known_url: string | null;
+  fraud_tags: string[] | null;
   unpaid_commission_cents: number;
   paid_commission_cents: number;
   total_referrals: number;
   total_conversions: number;
+  primary_link_token: string | null;
 }
 
 interface ReferralRow extends ReferralSignalRow {
@@ -55,10 +57,12 @@ export async function GET() {
       SELECT
         a.rewardful_id, a.first_name, a.last_name, a.email, a.status, a.created_at,
         a.review_status, a.review_notes, a.reviewed_at, a.known_url,
+        COALESCE(a.fraud_tags, '[]'::jsonb) AS fraud_tags,
         COALESCE(a.unpaid_commission_cents, 0) AS unpaid_commission_cents,
         COALESCE(a.paid_commission_cents, 0) AS paid_commission_cents,
         COALESCE(r_stats.total_referrals, 0) AS total_referrals,
-        COALESCE(r_stats.total_conversions, 0) AS total_conversions
+        COALESCE(r_stats.total_conversions, 0) AS total_conversions,
+        link_stats.primary_link_token AS primary_link_token
       FROM affiliates a
       LEFT JOIN (
         SELECT affiliate_id,
@@ -68,6 +72,14 @@ export async function GET() {
         WHERE status != 'deleted'
         GROUP BY affiliate_id
       ) r_stats ON r_stats.affiliate_id = a.rewardful_id
+      LEFT JOIN LATERAL (
+        SELECT link_token AS primary_link_token
+        FROM referrals
+        WHERE affiliate_id = a.rewardful_id AND link_token IS NOT NULL
+        GROUP BY link_token
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+      ) link_stats ON true
       WHERE a.status != 'deleted'
         AND COALESCE(r_stats.total_referrals, 0) > 0
     `,
@@ -221,6 +233,8 @@ export async function GET() {
       reviewNotes: a.review_notes,
       reviewedAt: a.reviewed_at,
       knownUrl: a.known_url,
+      fraudTags: Array.isArray(a.fraud_tags) ? a.fraud_tags : [],
+      linkToken: a.primary_link_token,
       unpaidCommissionCents: Number(a.unpaid_commission_cents),
       paidCommissionCents: Number(a.paid_commission_cents),
       referrals: Number(a.total_referrals),
@@ -253,6 +267,8 @@ export async function GET() {
     affiliatesWithDuplicateName: enriched.filter(e => e.risk.stats.duplicateNameCount > 0).length,
     affiliatesWithBurstPattern: enriched.filter(e => e.risk.stats.burstConcentration >= 0.7 && e.referrals >= 10).length,
     affiliatesWithSuperFastConv: enriched.filter(e => e.risk.stats.superFastConvCount > 0).length,
+    affiliatesTaggedBrandBidding: enriched.filter(e => e.fraudTags.includes('brand_bidding')).length,
+    affiliatesTaggedAnyFraud: enriched.filter(e => e.fraudTags.length > 0).length,
   };
 
   return NextResponse.json({ summary, affiliates: enriched });

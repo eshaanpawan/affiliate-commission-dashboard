@@ -82,6 +82,7 @@ export async function POST(req: NextRequest) {
   await run('affiliates.risk_score', () => sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS risk_score INT`);
   await run('affiliates.risk_signals', () => sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS risk_signals JSONB`);
   await run('affiliates.risk_updated_at', () => sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS risk_updated_at TIMESTAMPTZ`);
+  await run('affiliates.fraud_tags', () => sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS fraud_tags JSONB DEFAULT '[]'::jsonb`);
 
   // Referrals: link tracking, country (PostHog enrichment), fraud signal capture
   await run('referrals.link_id', () => sql`ALTER TABLE referrals ADD COLUMN IF NOT EXISTS link_id TEXT`);

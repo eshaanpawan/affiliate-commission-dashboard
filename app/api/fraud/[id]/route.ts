@@ -19,6 +19,7 @@ export async function GET(
       SELECT
         rewardful_id, first_name, last_name, email, status, created_at,
         review_status, review_notes, reviewed_at, known_url,
+        COALESCE(fraud_tags, '[]'::jsonb) AS fraud_tags,
         COALESCE(unpaid_commission_cents, 0) AS unpaid_commission_cents,
         COALESCE(paid_commission_cents, 0) AS paid_commission_cents
       FROM affiliates
@@ -161,6 +162,7 @@ export async function GET(
       reviewNotes: a.review_notes,
       reviewedAt: a.reviewed_at,
       knownUrl: a.known_url,
+      fraudTags: Array.isArray(a.fraud_tags) ? a.fraud_tags : [],
       unpaidCommissionCents: Number(a.unpaid_commission_cents),
       paidCommissionCents: Number(a.paid_commission_cents),
     },

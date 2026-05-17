@@ -144,7 +144,9 @@ export async function GET(req: NextRequest) {
         COALESCE(r_stats.referrals_today, 0) AS referrals_today,
         COALESCE(r_stats.conversions_today, 0) AS conversions_today,
         COALESCE(s_stats.revenue_cents, 0) AS revenue_cents,
-        a.unpaid_commission_cents AS commission_cents
+        a.unpaid_commission_cents AS commission_cents,
+        link_stats.primary_link_token,
+        COALESCE(a.fraud_tags, '[]'::jsonb) AS fraud_tags
       FROM affiliates a
       LEFT JOIN (
         SELECT
@@ -161,6 +163,14 @@ export async function GET(req: NextRequest) {
         FROM sales WHERE status = 'created'
         GROUP BY affiliate_id
       ) s_stats ON s_stats.affiliate_id = a.rewardful_id
+      LEFT JOIN LATERAL (
+        SELECT link_token AS primary_link_token
+        FROM referrals
+        WHERE affiliate_id = a.rewardful_id AND link_token IS NOT NULL
+        GROUP BY link_token
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+      ) link_stats ON true
       WHERE a.status != 'deleted'
       ORDER BY conversions DESC, referrals DESC
     `,
@@ -332,6 +342,8 @@ export async function GET(req: NextRequest) {
       conversionsToday: Number(a.conversions_today),
       revenueCents: Number(a.revenue_cents),
       commissionCents: Number(a.commission_cents),
+      linkToken: a.primary_link_token,
+      fraudTags: Array.isArray(a.fraud_tags) ? a.fraud_tags : [],
     })),
     recentActivity: recentEvents,
     monthly,
