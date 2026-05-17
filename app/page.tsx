@@ -65,6 +65,28 @@ interface DashboardData {
   affiliateCountries: { affiliate_id: string; name: string; email: string; total: number; countries: { country_code: string; country_name: string; conversions: number }[] }[];
 }
 
+interface TtsAffiliate {
+  affiliateId: string;
+  name: string;
+  email: string | null;
+  linkToken: string | null;
+  ftsCount: number;
+  medianTtsSec: number | null;
+  meanTtsSec: number | null;
+  minTtsSec: number;
+  maxTtsSec: number;
+  sample: { email: string; ttsSec: number; signupAt: string; ftsAt: string }[];
+}
+
+interface TtsResponse {
+  window: { from: string; to: string };
+  totalFts: number;
+  matchedFts?: number;
+  overall: { medianTtsSec: number | null; mean: number | null; count: number };
+  affiliates: TtsAffiliate[];
+  note?: string;
+}
+
 interface AffiliateDetail {
   dailyReferrals: { day: string; total: number; converted: number }[];
   dailyRevenue: { day: string; usd: number }[];
@@ -78,6 +100,26 @@ function fmt(cents: number) {
 function pct(a: number, b: number) {
   if (b === 0) return '0%';
   return ((a / b) * 100).toFixed(1) + '%';
+}
+
+function fmtDuration(sec: number | null): string {
+  if (sec === null || !isFinite(sec)) return '—';
+  if (sec < 60) return `${Math.round(sec)}s`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  if (sec < 86400) {
+    const h = sec / 3600;
+    return h < 10 ? `${h.toFixed(1)}h` : `${Math.round(h)}h`;
+  }
+  const d = sec / 86400;
+  return d < 10 ? `${d.toFixed(1)}d` : `${Math.round(d)}d`;
+}
+
+function ttsTone(sec: number | null): string {
+  if (sec === null) return 'text-gray-400';
+  if (sec < 3600) return 'text-red-600 font-bold';        // <1 hour — high suspicion
+  if (sec < 86400) return 'text-amber-600 font-semibold'; // <1 day — moderate
+  if (sec < 7 * 86400) return 'text-gray-700';            // <1 week — normal
+  return 'text-emerald-600';                                // 1+ week — healthy nurture
 }
 
 type SortKey = 'referrals' | 'conversions' | 'revenueCents' | 'commissionCents';
@@ -185,6 +227,22 @@ export default function Dashboard() {
   const [affiliateCountriesExpanded, setAffiliateCountriesExpanded] = useState(false);
   const [expandedAffiliateCountries, setExpandedAffiliateCountries] = useState<Set<string>>(new Set());
   const [affiliateCountryView, setAffiliateCountryView] = useState<Record<string, 'chart' | 'table'>>({});
+  const [ttsExpanded, setTtsExpanded] = useState(false);
+  const [ttsData, setTtsData] = useState<TtsResponse | null>(null);
+  const [ttsLoading, setTtsLoading] = useState(false);
+  const [ttsFrom, setTtsFrom] = useState('2026-04-01');
+  const [ttsTo, setTtsTo] = useState('2026-06-01');
+
+  async function loadTts(from = ttsFrom, to = ttsTo) {
+    setTtsLoading(true);
+    try {
+      const res = await fetch(`/api/affiliates/tts?from=${from}&to=${to}`);
+      const json = await res.json();
+      setTtsData(json);
+    } finally {
+      setTtsLoading(false);
+    }
+  }
 
   async function load(p?: string) {
     try {
@@ -647,6 +705,113 @@ export default function Dashboard() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+
+        {/* Time-to-First-Purchase per Affiliate */}
+        <div className="bg-white rounded-xl border border-gray-200 mb-8">
+          <div
+            className="px-5 py-4 border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+            onClick={() => { if (!ttsExpanded && !ttsData) loadTts(); setTtsExpanded(!ttsExpanded); }}
+          >
+            <div>
+              <h2 className="text-sm font-semibold text-gray-700">
+                Sign-up → First Purchase (Median TTS per affiliate)
+                <span className="text-gray-400 ml-2">{ttsExpanded ? '▼' : '▶'}</span>
+              </h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                For affiliates whose customers converted (FTS) in the window. Short median = intercepted intent (likely brand bidding). Long median = genuine nurture.
+              </p>
+            </div>
+            {ttsData && (
+              <div className="text-right">
+                <p className="text-xs text-gray-400">Overall median</p>
+                <p className={`text-lg font-bold ${ttsTone(ttsData.overall.medianTtsSec)}`}>
+                  {fmtDuration(ttsData.overall.medianTtsSec)}
+                </p>
+                <p className="text-xs text-gray-400">{ttsData.overall.count} FTS total · {ttsData.matchedFts ?? 0} matched to affiliates</p>
+              </div>
+            )}
+          </div>
+          {ttsExpanded && (
+            <div className="p-5">
+              {/* Date range controls */}
+              <div className="flex flex-wrap items-center gap-3 mb-4">
+                <label className="text-xs text-gray-500">From</label>
+                <input type="date" value={ttsFrom} onChange={(e) => setTtsFrom(e.target.value)}
+                       className="px-2 py-1 text-xs border border-gray-200 rounded" />
+                <label className="text-xs text-gray-500">To</label>
+                <input type="date" value={ttsTo} onChange={(e) => setTtsTo(e.target.value)}
+                       className="px-2 py-1 text-xs border border-gray-200 rounded" />
+                <button
+                  onClick={() => loadTts(ttsFrom, ttsTo)}
+                  disabled={ttsLoading}
+                  className="px-3 py-1 text-xs font-medium rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {ttsLoading ? 'Loading…' : 'Recompute'}
+                </button>
+                <span className="text-xs text-gray-400 ml-auto">
+                  Color: <span className="text-red-600 font-bold">red</span> &lt;1h · <span className="text-amber-600 font-semibold">amber</span> &lt;1d · <span className="text-gray-700">gray</span> &lt;1w · <span className="text-emerald-600">green</span> 1w+
+                </span>
+              </div>
+
+              {ttsLoading && !ttsData && (
+                <div className="text-sm text-gray-400 py-8 text-center">Querying PostHog…</div>
+              )}
+              {ttsData?.note && (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-3 mb-3">{ttsData.note}</div>
+              )}
+              {ttsData && ttsData.affiliates.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-xs text-gray-500 border-b border-gray-100">
+                        <th className="text-left px-2 py-2 font-medium">Affiliate</th>
+                        <th className="text-right px-2 py-2 font-medium">FTS in window</th>
+                        <th className="text-right px-2 py-2 font-medium">Median TTS</th>
+                        <th className="text-right px-2 py-2 font-medium">Mean TTS</th>
+                        <th className="text-right px-2 py-2 font-medium">Min</th>
+                        <th className="text-right px-2 py-2 font-medium">Max</th>
+                        <th className="text-left px-2 py-2 font-medium">Sample (shortest)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ttsData.affiliates.map((a) => (
+                        <tr key={a.affiliateId} className="border-b border-gray-50 hover:bg-gray-50">
+                          <td className="px-2 py-2">
+                            <p className="font-medium text-gray-900 text-sm">{a.name}</p>
+                            <p className="text-xs text-gray-400">{a.email}</p>
+                            {a.linkToken && (
+                              <a href={`https://runable.com/?via=${a.linkToken}`} target="_blank" rel="noreferrer"
+                                 onClick={(e) => e.stopPropagation()}
+                                 className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
+                                ?via={a.linkToken}
+                              </a>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 text-right font-medium text-gray-700">{a.ftsCount}</td>
+                          <td className={`px-2 py-2 text-right ${ttsTone(a.medianTtsSec)}`}>{fmtDuration(a.medianTtsSec)}</td>
+                          <td className="px-2 py-2 text-right text-gray-600">{fmtDuration(a.meanTtsSec)}</td>
+                          <td className="px-2 py-2 text-right text-gray-500">{fmtDuration(a.minTtsSec)}</td>
+                          <td className="px-2 py-2 text-right text-gray-500">{fmtDuration(a.maxTtsSec)}</td>
+                          <td className="px-2 py-2 text-xs text-gray-500">
+                            {a.sample.slice(0, 3).map((s, i) => (
+                              <div key={i} className="truncate max-w-[260px]">
+                                <span className="text-gray-400">{fmtDuration(s.ttsSec)}</span>
+                                <span className="ml-2 font-mono text-[10px]">{s.email}</span>
+                              </div>
+                            ))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {ttsData && ttsData.affiliates.length === 0 && !ttsLoading && (
+                <div className="text-sm text-gray-400 py-8 text-center">No affiliate-attributed FTS in this window.</div>
+              )}
             </div>
           )}
         </div>
