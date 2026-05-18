@@ -535,9 +535,13 @@ function SortableTh({ sortKey, sortDir, onSort, k, label, align, title }: {
 const SORTABLE_HEADERS: { key: SortKey; label: string; defaultDir: SortDir; title?: string }[] = [
   { key: 'risk', label: 'Risk', defaultDir: 'desc' },
   { key: 'clicks', label: 'Clicks', defaultDir: 'desc' },
-  { key: 'convRate', label: 'Click→Pay', defaultDir: 'desc' },
+  { key: 'pageviews', label: 'Pageviews', defaultDir: 'desc' },
+  { key: 'signups', label: 'Signups', defaultDir: 'desc' },
+  { key: 'phFts', label: 'FTS', defaultDir: 'desc' },
+  { key: 'conversions', label: 'Conversions', defaultDir: 'desc' },
   { key: 'instant', label: 'Instant %', defaultDir: 'desc' },
-  { key: 'signupToFts', label: 'Median sign-up to pay', defaultDir: 'asc' },
+  { key: 'signupToFts', label: 'Median Sign-up to FTS', defaultDir: 'asc' },
+  { key: 'suFtsRate', label: 'Signup to FTS', defaultDir: 'desc' },
   { key: 'googleSim', label: 'vs Google', defaultDir: 'desc' },
   { key: 'unpaid', label: 'Unpaid', defaultDir: 'desc' },
 ];
