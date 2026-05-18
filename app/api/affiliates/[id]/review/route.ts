@@ -37,19 +37,40 @@ export async function POST(
 
   const now = new Date().toISOString();
 
-  await sql`
-    UPDATE affiliates
-    SET
-      review_status = COALESCE(${reviewStatus ?? null}, review_status),
-      review_notes = CASE WHEN ${reviewNotes === undefined} THEN review_notes ELSE ${reviewNotes ?? null} END,
-      known_url = CASE WHEN ${knownUrl === undefined} THEN known_url ELSE ${knownUrl ?? null} END,
-      fraud_tags = CASE WHEN ${fraudTags === undefined} THEN fraud_tags ELSE ${JSON.stringify(fraudTags ?? [])}::jsonb END,
-      reviewed_at = ${now}
-    WHERE rewardful_id = ${id}
-  `;
+  // Auto-migrate fraud_tags column on first save (idempotent ALTER).
+  if (fraudTags !== undefined) {
+    try {
+      await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS fraud_tags JSONB DEFAULT '[]'::jsonb`;
+    } catch (e) {
+      console.error('Could not ensure fraud_tags column:', e);
+    }
+  }
+
+  if (fraudTags !== undefined) {
+    await sql`
+      UPDATE affiliates
+      SET
+        review_status = COALESCE(${reviewStatus ?? null}, review_status),
+        review_notes = CASE WHEN ${reviewNotes === undefined} THEN review_notes ELSE ${reviewNotes ?? null} END,
+        known_url = CASE WHEN ${knownUrl === undefined} THEN known_url ELSE ${knownUrl ?? null} END,
+        fraud_tags = ${JSON.stringify(fraudTags)}::jsonb,
+        reviewed_at = ${now}
+      WHERE rewardful_id = ${id}
+    `;
+  } else {
+    await sql`
+      UPDATE affiliates
+      SET
+        review_status = COALESCE(${reviewStatus ?? null}, review_status),
+        review_notes = CASE WHEN ${reviewNotes === undefined} THEN review_notes ELSE ${reviewNotes ?? null} END,
+        known_url = CASE WHEN ${knownUrl === undefined} THEN known_url ELSE ${knownUrl ?? null} END,
+        reviewed_at = ${now}
+      WHERE rewardful_id = ${id}
+    `;
+  }
 
   const updated = await sql`
-    SELECT rewardful_id, review_status, review_notes, reviewed_at, known_url, fraud_tags
+    SELECT rewardful_id, review_status, review_notes, reviewed_at, known_url
     FROM affiliates WHERE rewardful_id = ${id} LIMIT 1
   `;
 

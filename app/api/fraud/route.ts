@@ -2,6 +2,18 @@ import { NextResponse } from 'next/server';
 import sql from '@/lib/db';
 import { computeAffiliateRisk, ReferralSignalRow } from '@/lib/fraud-detection';
 
+// Cached check: is the fraud_tags column present? Set by /api/admin/migrate.
+let fraudTagsColumnExists: boolean | null = null;
+async function hasFraudTagsColumn(): Promise<boolean> {
+  if (fraudTagsColumnExists !== null) return fraudTagsColumnExists;
+  const r = await sql`
+    SELECT 1 AS x FROM information_schema.columns
+    WHERE table_name = 'affiliates' AND column_name = 'fraud_tags' LIMIT 1
+  `;
+  fraudTagsColumnExists = r.length > 0;
+  return fraudTagsColumnExists;
+}
+
 interface AffiliateRow {
   rewardful_id: string;
   first_name: string | null;
@@ -53,11 +65,21 @@ export async function GET() {
     customerOverlapRaw,
     nameKeyRaw,
   ] = await Promise.all([
-    sql`
+    (await hasFraudTagsColumn()) ? sql`
       SELECT
         a.rewardful_id, a.first_name, a.last_name, a.email, a.status, a.created_at,
         a.review_status, a.review_notes, a.reviewed_at, a.known_url,
         COALESCE(a.fraud_tags, '[]'::jsonb) AS fraud_tags,
+        COALESCE(a.unpaid_commission_cents, 0) AS unpaid_commission_cents,
+        COALESCE(a.paid_commission_cents, 0) AS paid_commission_cents,
+        COALESCE(r_stats.total_referrals, 0) AS total_referrals,
+        COALESCE(r_stats.total_conversions, 0) AS total_conversions,
+        link_stats.primary_link_token AS primary_link_token
+      FROM affiliates a` : sql`
+      SELECT
+        a.rewardful_id, a.first_name, a.last_name, a.email, a.status, a.created_at,
+        a.review_status, a.review_notes, a.reviewed_at, a.known_url,
+        '[]'::jsonb AS fraud_tags,
         COALESCE(a.unpaid_commission_cents, 0) AS unpaid_commission_cents,
         COALESCE(a.paid_commission_cents, 0) AS paid_commission_cents,
         COALESCE(r_stats.total_referrals, 0) AS total_referrals,

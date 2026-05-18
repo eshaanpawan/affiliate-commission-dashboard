@@ -1,22 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/db';
-import { getSignupToFirstPurchaseByEmail } from '@/lib/posthog';
+import { getFunnelTimingsForFTS, getFunnelCountsBySource, FunnelTiming } from '@/lib/posthog';
 
-// Per-affiliate Median Time-to-Subscribe (TTS) for first-time paid customers.
-// Default window: April 2026 — May 2026 (the user's requested investigation window).
-// Logic:
-//   1. PostHog: pull every (email, signup_at, fts_at) tuple where FTS is in window
-//   2. Our DB: join those emails to referrals.customer_email → affiliate_id
-//   3. Per affiliate: compute median TTS, FTS count, min/max
+// Per-affiliate funnel comparison vs Google brand-search baseline.
 //
-// Short median (e.g. <1 hour) suggests brand-bidding / intercepted intent
-// — those customers were already buying-intent when they hit the affiliate link.
+// For each source / affiliate, returns:
+//   - Funnel counts:    Pageviews → Signups → FTS in window
+//   - Conversion rates: PV→Signup %, Signup→FTS %
+//   - Signup→FTS median (decision-time duration)
+//
+// Sources:
+//   - 'google'      : initial UTM source / referrer contains 'google' (brand-search baseline)
+//   - 'affiliate'   : customer email matches a Rewardful referral
+//   - 'other'       : everything else
+//
+// If an affiliate's Signup→FTS time matches the Google baseline, they are
+// almost certainly intercepting Google brand-search traffic (brand bidding).
 
 function median(nums: number[]): number | null {
-  if (nums.length === 0) return null;
-  const s = [...nums].sort((a, b) => a - b);
+  const f = nums.filter(n => isFinite(n));
+  if (f.length === 0) return null;
+  const s = [...f].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
   return s.length % 2 === 0 ? (s[m - 1] + s[m]) / 2 : s[m];
+}
+
+interface FunnelRow {
+  label: string;
+  source: 'google' | 'affiliate' | 'other' | 'affiliate_specific';
+  affiliateId?: string;
+  email?: string | null;
+  linkToken?: string | null;
+  pageviews: number | null;        // PostHog count of users with $pageview in window
+  signups: number;                 // count of users who hit sign_up
+  fts: number;                     // count of users who hit FTS
+  pvToSignupRate: number | null;   // signups / pageviews
+  signupToFtsRate: number | null;  // fts / signups
+  signupToFtsSecMedian: number | null;
+  // Similarity to Google baseline (0..1) — higher = more like brand-search interception
+  googleSimilarity?: number | null;
 }
 
 interface ReferralCustomer {
@@ -32,47 +54,55 @@ interface AffiliateRow {
   primary_link_token: string | null;
 }
 
+function isGoogleSource(t: FunnelTiming): boolean {
+  const utm = (t.initialUtmSource ?? '').toLowerCase();
+  const ref = (t.initialReferrer ?? '').toLowerCase();
+  return utm.includes('google') || ref.includes('google');
+}
+
+function rateOrNull(n: number, d: number | null): number | null {
+  if (d === null || d === 0) return null;
+  return n / d;
+}
+
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const fromStr = sp.get('from') ?? '2026-04-01';
-  const toStr = sp.get('to') ?? '2026-06-01';  // exclusive upper bound — May 31 23:59:59
+  const toStr = sp.get('to') ?? '2026-06-01';
   const from = new Date(fromStr + (fromStr.includes('T') ? '' : 'T00:00:00Z'));
   const to = new Date(toStr + (toStr.includes('T') ? '' : 'T00:00:00Z'));
 
-  // 1. Pull PostHog data
-  const ftsByEmail = await getSignupToFirstPurchaseByEmail(from, to);
+  // 1. Pull FTS-window funnel timings (per user) + group counts (per source)
+  const [timings, sourceCounts] = await Promise.all([
+    getFunnelTimingsForFTS(from, to),
+    getFunnelCountsBySource(from, to),
+  ]);
 
-  if (ftsByEmail.size === 0) {
+  if (timings.length === 0) {
     return NextResponse.json({
       window: { from: from.toISOString(), to: to.toISOString() },
-      totalFts: 0,
-      overall: { medianTtsSec: null, mean: null, count: 0 },
+      baselines: [],
       affiliates: [],
       note: 'No PostHog data — check POSTHOG_API_KEY / POSTHOG_PROJECT_ID env vars',
     });
   }
 
-  // 2. Join to referrals.customer_email → affiliate_id
-  const emails = [...ftsByEmail.keys()];
-  const referrals = (await sql`
+  const emails = timings.map(t => t.email.toLowerCase());
+
+  // 2. Map emails to affiliates
+  const refRows = (await sql`
     SELECT DISTINCT affiliate_id, LOWER(customer_email) AS customer_email
     FROM referrals
     WHERE LOWER(customer_email) = ANY(${emails}::text[])
       AND affiliate_id IS NOT NULL
   `) as unknown as ReferralCustomer[];
-
-  const affiliateIds = [...new Set(referrals.map(r => r.affiliate_id))];
-  if (affiliateIds.length === 0) {
-    return NextResponse.json({
-      window: { from: from.toISOString(), to: to.toISOString() },
-      totalFts: ftsByEmail.size,
-      overall: computeOverall(ftsByEmail),
-      affiliates: [],
-      note: 'No referrals matched these FTS emails (customer_email may be sparse in our DB)',
-    });
+  const emailToAffiliateId = new Map<string, string>();
+  for (const r of refRows) {
+    if (!emailToAffiliateId.has(r.customer_email)) emailToAffiliateId.set(r.customer_email, r.affiliate_id);
   }
+  const affiliateIds = [...new Set(refRows.map(r => r.affiliate_id))];
 
-  const affRows = (await sql`
+  const affRows = affiliateIds.length === 0 ? [] : (await sql`
     SELECT a.rewardful_id, a.first_name, a.last_name, a.email,
            link_stats.primary_link_token
     FROM affiliates a
@@ -86,64 +116,108 @@ export async function GET(req: NextRequest) {
   `) as unknown as AffiliateRow[];
   const affMap = new Map(affRows.map(a => [a.rewardful_id, a]));
 
-  // 3. Group by affiliate
-  const byAffiliate = new Map<string, { ttsSec: number; email: string; ftsAt: string; signupAt: string }[]>();
-  for (const ref of referrals) {
-    const fts = ftsByEmail.get(ref.customer_email);
-    if (!fts) continue;
-    const list = byAffiliate.get(ref.affiliate_id) ?? [];
-    list.push({ ttsSec: fts.ttsSec, email: ref.customer_email, ftsAt: fts.ftsAt, signupAt: fts.signupAt });
-    byAffiliate.set(ref.affiliate_id, list);
+  // 3. Classify and bucket
+  const googleTimings: FunnelTiming[] = [];
+  const otherTimings: FunnelTiming[] = [];
+  const affiliateTimings: FunnelTiming[] = [];
+  const byAffiliate = new Map<string, FunnelTiming[]>();
+
+  for (const t of timings) {
+    const affId = emailToAffiliateId.get(t.email.toLowerCase());
+    if (affId) {
+      affiliateTimings.push(t);
+      const list = byAffiliate.get(affId) ?? [];
+      list.push(t);
+      byAffiliate.set(affId, list);
+    } else if (isGoogleSource(t)) {
+      googleTimings.push(t);
+    } else {
+      otherTimings.push(t);
+    }
   }
 
-  // 4. Compute per-affiliate stats
-  const result = [];
-  for (const [affId, entries] of byAffiliate) {
+  // 4. Build baseline rows
+  const googleSignupToFts = median(googleTimings.map(t => t.signupToFtsSec).filter((x): x is number => x !== null));
+  const otherSignupToFts = median(otherTimings.map(t => t.signupToFtsSec).filter((x): x is number => x !== null));
+  const affSignupToFts = median(affiliateTimings.map(t => t.signupToFtsSec).filter((x): x is number => x !== null));
+
+  const googleRow: FunnelRow = {
+    label: '🎯 Google (brand-search baseline)',
+    source: 'google',
+    pageviews: sourceCounts.google.pageviews,
+    signups: sourceCounts.google.signups,
+    fts: sourceCounts.google.fts,
+    pvToSignupRate: rateOrNull(sourceCounts.google.signups, sourceCounts.google.pageviews),
+    signupToFtsRate: rateOrNull(sourceCounts.google.fts, sourceCounts.google.signups),
+    signupToFtsSecMedian: googleSignupToFts ?? sourceCounts.google.signupToFtsSec,
+  };
+  const otherRow: FunnelRow = {
+    label: 'Direct / other (control)',
+    source: 'other',
+    pageviews: sourceCounts.other.pageviews,
+    signups: sourceCounts.other.signups,
+    fts: sourceCounts.other.fts,
+    pvToSignupRate: rateOrNull(sourceCounts.other.signups, sourceCounts.other.pageviews),
+    signupToFtsRate: rateOrNull(sourceCounts.other.fts, sourceCounts.other.signups),
+    signupToFtsSecMedian: otherSignupToFts ?? sourceCounts.other.signupToFtsSec,
+  };
+  const affRow: FunnelRow = {
+    label: 'All affiliates combined',
+    source: 'affiliate',
+    pageviews: null, // we don't have a clean affiliate-attributed pageview count from PostHog
+    signups: affiliateTimings.filter(t => t.signupAt !== null).length,
+    fts: affiliateTimings.length,
+    pvToSignupRate: null,
+    signupToFtsRate: null,
+    signupToFtsSecMedian: affSignupToFts,
+  };
+
+  // 5. Per-affiliate rows
+  const affiliateRows: FunnelRow[] = [];
+  for (const [affId, list] of byAffiliate) {
     const aff = affMap.get(affId);
     if (!aff) continue;
-    const ttsValues = entries.map(e => e.ttsSec).filter(s => isFinite(s));
-    if (ttsValues.length === 0) continue;
-    const med = median(ttsValues);
-    const mean = ttsValues.reduce((a, b) => a + b, 0) / ttsValues.length;
-    const minV = Math.min(...ttsValues);
-    const maxV = Math.max(...ttsValues);
-    result.push({
+    const sf = list.map(t => t.signupToFtsSec).filter((x): x is number => x !== null);
+    const med = median(sf);
+
+    // Similarity to Google baseline: log-distance comparison
+    let similarity: number | null = null;
+    if (googleSignupToFts !== null && otherSignupToFts !== null && med !== null && list.length >= 2 && googleSignupToFts !== otherSignupToFts) {
+      const ln = (x: number) => Math.log(Math.max(60, x));
+      const dG = Math.abs(ln(med) - ln(googleSignupToFts));
+      const dO = Math.abs(ln(med) - ln(otherSignupToFts));
+      const total = dG + dO;
+      similarity = total === 0 ? 0.5 : dO / total;
+    }
+
+    affiliateRows.push({
+      label: [aff.first_name, aff.last_name].filter(Boolean).join(' ') || aff.email || '?',
+      source: 'affiliate_specific',
       affiliateId: affId,
-      name: [aff.first_name, aff.last_name].filter(Boolean).join(' ') || aff.email || '?',
       email: aff.email,
       linkToken: aff.primary_link_token,
-      ftsCount: entries.length,
-      medianTtsSec: med,
-      meanTtsSec: mean,
-      minTtsSec: minV,
-      maxTtsSec: maxV,
-      // Include a sample to help manual review
-      sample: entries
-        .sort((a, b) => a.ttsSec - b.ttsSec)
-        .slice(0, 5)
-        .map(e => ({ email: e.email, ttsSec: e.ttsSec, signupAt: e.signupAt, ftsAt: e.ftsAt })),
+      pageviews: null,
+      signups: list.filter(t => t.signupAt !== null).length,
+      fts: list.length,
+      pvToSignupRate: null,
+      signupToFtsRate: null,
+      signupToFtsSecMedian: med,
+      googleSimilarity: similarity,
     });
   }
 
-  // Sort: shortest median TTS first (most suspicious)
-  result.sort((a, b) => {
-    if (b.ftsCount !== a.ftsCount && (a.ftsCount < 2 || b.ftsCount < 2)) return b.ftsCount - a.ftsCount;
-    return (a.medianTtsSec ?? Infinity) - (b.medianTtsSec ?? Infinity);
+  // Sort affiliates: highest Google-similarity first, fts count as tiebreaker
+  affiliateRows.sort((a, b) => {
+    const sa = a.googleSimilarity ?? -1;
+    const sb = b.googleSimilarity ?? -1;
+    if (sb !== sa) return sb - sa;
+    return b.fts - a.fts;
   });
 
   return NextResponse.json({
     window: { from: from.toISOString(), to: to.toISOString() },
-    totalFts: ftsByEmail.size,
-    matchedFts: byAffiliate.size === 0 ? 0 : [...byAffiliate.values()].reduce((s, v) => s + v.length, 0),
-    overall: computeOverall(ftsByEmail),
-    affiliates: result,
+    totalFts: timings.length,
+    baselines: [googleRow, otherRow, affRow],
+    affiliates: affiliateRows,
   });
-}
-
-function computeOverall(ftsMap: Map<string, { ttsSec: number }>) {
-  const all = [...ftsMap.values()].map(v => v.ttsSec).filter(s => isFinite(s));
-  if (all.length === 0) return { medianTtsSec: null, mean: null, count: 0 };
-  const med = median(all);
-  const mean = all.reduce((a, b) => a + b, 0) / all.length;
-  return { medianTtsSec: med, mean, count: all.length };
 }

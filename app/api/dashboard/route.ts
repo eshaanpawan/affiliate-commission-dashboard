@@ -1,6 +1,20 @@
 import { NextResponse, NextRequest } from 'next/server';
 import sql from '@/lib/db';
 
+// Cached for the lifetime of the function instance. Detects whether the
+// fraud_tags column has been added by /api/admin/migrate yet.
+let fraudTagsColumnExists: boolean | null = null;
+async function hasFraudTagsColumn(): Promise<boolean> {
+  if (fraudTagsColumnExists !== null) return fraudTagsColumnExists;
+  const r = await sql`
+    SELECT 1 AS x FROM information_schema.columns
+    WHERE table_name = 'affiliates' AND column_name = 'fraud_tags'
+    LIMIT 1
+  `;
+  fraudTagsColumnExists = r.length > 0;
+  return fraudTagsColumnExists;
+}
+
 export async function GET(req: NextRequest) {
   const period = req.nextUrl.searchParams.get('period') ?? 'all';
   const intervalMap: Record<string, string> = { '7d': '7 days', '30d': '30 days', '90d': '90 days' };
@@ -130,8 +144,10 @@ export async function GET(req: NextRequest) {
       GROUP BY DATE(created_at)
       ORDER BY day
     `,
-    // Affiliates table
-    sql`
+    // Affiliates table.
+    // fraud_tags column is added by /api/admin/migrate; if it doesn't exist yet,
+    // we use a stub literal so the dashboard keeps loading.
+    (await hasFraudTagsColumn()) ? sql`
       SELECT
         a.rewardful_id,
         a.first_name,
@@ -147,6 +163,22 @@ export async function GET(req: NextRequest) {
         a.unpaid_commission_cents AS commission_cents,
         link_stats.primary_link_token,
         COALESCE(a.fraud_tags, '[]'::jsonb) AS fraud_tags
+      FROM affiliates a` : sql`
+      SELECT
+        a.rewardful_id,
+        a.first_name,
+        a.last_name,
+        a.email,
+        a.status,
+        a.created_at,
+        COALESCE(r_stats.referrals, 0) AS referrals,
+        COALESCE(r_stats.conversions, 0) AS conversions,
+        COALESCE(r_stats.referrals_today, 0) AS referrals_today,
+        COALESCE(r_stats.conversions_today, 0) AS conversions_today,
+        COALESCE(s_stats.revenue_cents, 0) AS revenue_cents,
+        a.unpaid_commission_cents AS commission_cents,
+        link_stats.primary_link_token,
+        '[]'::jsonb AS fraud_tags
       FROM affiliates a
       LEFT JOIN (
         SELECT

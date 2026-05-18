@@ -2,6 +2,17 @@ import { NextResponse } from 'next/server';
 import sql from '@/lib/db';
 import { computeAffiliateRisk, normalizeEmail, ReferralSignalRow } from '@/lib/fraud-detection';
 
+let fraudTagsColumnExists: boolean | null = null;
+async function hasFraudTagsColumn(): Promise<boolean> {
+  if (fraudTagsColumnExists !== null) return fraudTagsColumnExists;
+  const r = await sql`
+    SELECT 1 AS x FROM information_schema.columns
+    WHERE table_name = 'affiliates' AND column_name = 'fraud_tags' LIMIT 1
+  `;
+  fraudTagsColumnExists = r.length > 0;
+  return fraudTagsColumnExists;
+}
+
 interface ReferralRow extends ReferralSignalRow {
   rewardful_id: string;
   link_token: string | null;
@@ -15,11 +26,21 @@ export async function GET(
   const { id } = await context.params;
 
   const [affiliate, referralsRaw, links, commissionStats, visitorOverlap, customerOverlap, dupCountResult, signupClusterResult] = await Promise.all([
-    sql`
+    (await hasFraudTagsColumn()) ? sql`
       SELECT
         rewardful_id, first_name, last_name, email, status, created_at,
         review_status, review_notes, reviewed_at, known_url,
         COALESCE(fraud_tags, '[]'::jsonb) AS fraud_tags,
+        COALESCE(unpaid_commission_cents, 0) AS unpaid_commission_cents,
+        COALESCE(paid_commission_cents, 0) AS paid_commission_cents
+      FROM affiliates
+      WHERE rewardful_id = ${id}
+      LIMIT 1
+    ` : sql`
+      SELECT
+        rewardful_id, first_name, last_name, email, status, created_at,
+        review_status, review_notes, reviewed_at, known_url,
+        '[]'::jsonb AS fraud_tags,
         COALESCE(unpaid_commission_cents, 0) AS unpaid_commission_cents,
         COALESCE(paid_commission_cents, 0) AS paid_commission_cents
       FROM affiliates

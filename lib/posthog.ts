@@ -20,6 +20,18 @@ export interface SignupToFTS {
   ttsSec: number;          // seconds between sign_up and FTS
 }
 
+export interface FunnelTiming {
+  email: string;
+  firstPvAt: string | null;        // earliest $pageview for this user
+  signupAt: string | null;
+  ftsAt: string;
+  initialUtmSource: string | null; // person property $initial_utm_source
+  initialReferrer: string | null;  // person property $initial_referring_domain
+  pvToSignupSec: number | null;    // signup - first_pv
+  signupToFtsSec: number | null;   // fts - signup
+  pvToFtsSec: number | null;       // fts - first_pv (full funnel)
+}
+
 async function runHogQL(query: string): Promise<HogQLResponse | null> {
   const apiKey = process.env.POSTHOG_API_KEY;
   const projectId = process.env.POSTHOG_PROJECT_ID;
@@ -104,6 +116,157 @@ export async function getSignupToFirstPurchaseByEmail(
     });
   }
   return map;
+}
+
+export interface FunnelCounts {
+  pageviews: number;
+  signups: number;
+  fts: number;
+  signupToFtsSec: number | null; // overall median in this group
+}
+
+// Pageview / signup / FTS user counts per source, for ALL users active in window
+// (not just those who FTS'd). Used to compute funnel conversion rates per group.
+export async function getFunnelCountsBySource(
+  from: Date,
+  to: Date
+): Promise<{ google: FunnelCounts; affiliate_emails: Set<string>; other: FunnelCounts }> {
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
+
+  // For each distinct_id, what was their max funnel stage reached, and what's
+  // their initial source? Group by source bucket and count users at each stage.
+  const query = `
+    WITH user_funnel AS (
+      SELECT
+        events.distinct_id AS distinct_id,
+        any(person.properties.$initial_utm_source) AS initial_utm,
+        any(person.properties.$initial_referring_domain) AS initial_ref,
+        MAX(events.event = '$pageview') AS had_pv,
+        MAX(events.event = 'sign_up') AS had_signup,
+        MAX(events.event = 'subscription_updated'
+            AND events.properties.isUserFirstPaidPlan = true
+            AND events.properties.scenario = 'upgrade') AS had_fts,
+        MIN(CASE WHEN events.event = 'sign_up' THEN events.timestamp END) AS signup_at,
+        MIN(CASE WHEN events.event = 'subscription_updated'
+                  AND events.properties.isUserFirstPaidPlan = true
+                  AND events.properties.scenario = 'upgrade' THEN events.timestamp END) AS fts_at
+      FROM events
+      WHERE events.timestamp >= toDateTime('${fromIso}')
+        AND events.timestamp < toDateTime('${toIso}')
+      GROUP BY events.distinct_id
+    )
+    SELECT
+      CASE
+        WHEN LOWER(COALESCE(initial_utm, '')) LIKE '%google%' OR LOWER(COALESCE(initial_ref, '')) LIKE '%google%' THEN 'google'
+        ELSE 'other'
+      END AS source,
+      COUNT(DISTINCT CASE WHEN had_pv THEN distinct_id END) AS pv_users,
+      COUNT(DISTINCT CASE WHEN had_signup THEN distinct_id END) AS signup_users,
+      COUNT(DISTINCT CASE WHEN had_fts THEN distinct_id END) AS fts_users,
+      MEDIAN(CASE WHEN had_fts AND signup_at IS NOT NULL AND fts_at IS NOT NULL
+                  THEN dateDiff('second', signup_at, fts_at) END) AS sf_median_sec
+    FROM user_funnel
+    GROUP BY source
+  `;
+
+  const data = await runHogQL(query);
+  const result = {
+    google: { pageviews: 0, signups: 0, fts: 0, signupToFtsSec: null as number | null },
+    affiliate_emails: new Set<string>(),
+    other: { pageviews: 0, signups: 0, fts: 0, signupToFtsSec: null as number | null },
+  };
+  if (!data || data.error) return result;
+
+  for (const row of data.results) {
+    const [source, pv, signup, fts, sfMed] = row as [string, number, number, number, number | null];
+    const target = source === 'google' ? result.google : result.other;
+    target.pageviews = Number(pv);
+    target.signups = Number(signup);
+    target.fts = Number(fts);
+    target.signupToFtsSec = sfMed !== null && sfMed !== undefined ? Number(sfMed) : null;
+  }
+  return result;
+}
+
+// Returns full funnel timings (pageview → signup → FTS) + traffic-source
+// attribution for every user whose FTS occurred in [from, to). Used to compare
+// affiliate-attributed conversions against the Google-brand-search baseline.
+export async function getFunnelTimingsForFTS(
+  from: Date,
+  to: Date
+): Promise<FunnelTiming[]> {
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
+
+  // Per-user aggregation: earliest pageview, earliest signup, earliest in-window FTS.
+  // Look back to 2025-01-01 to ensure we catch the first pageview/signup even for
+  // users who signed up well before their FTS.
+  const query = `
+    SELECT
+      events.distinct_id AS distinct_id,
+      LOWER(MAX(CASE
+        WHEN events.event = 'sign_up' THEN events.properties.email
+        WHEN events.event = 'subscription_updated' THEN events.properties.email
+        ELSE NULL
+      END)) AS email,
+      MIN(CASE WHEN events.event = '$pageview' THEN events.timestamp END) AS first_pv_at,
+      MIN(CASE WHEN events.event = 'sign_up' THEN events.timestamp END) AS signup_at,
+      MIN(CASE
+        WHEN events.event = 'subscription_updated'
+         AND events.properties.isUserFirstPaidPlan = true
+         AND events.properties.scenario = 'upgrade'
+        THEN events.timestamp END) AS fts_at,
+      any(person.properties.$initial_utm_source) AS initial_utm_source,
+      any(person.properties.$initial_referring_domain) AS initial_referring_domain
+    FROM events
+    WHERE events.timestamp >= toDateTime('2025-01-01')
+    GROUP BY events.distinct_id
+    HAVING fts_at >= toDateTime('${fromIso}')
+       AND fts_at < toDateTime('${toIso}')
+       AND email IS NOT NULL
+    LIMIT 50000
+  `;
+
+  const data = await runHogQL(query);
+  if (!data || data.error) {
+    if (data?.error) console.error('[posthog] HogQL error:', data.error);
+    return [];
+  }
+
+  const out: FunnelTiming[] = [];
+  for (const row of data.results) {
+    const [, email, firstPvRaw, signupRaw, ftsRaw, utmSource, refDomain] = row as
+      [string, string, string | null, string | null, string, string | null, string | null];
+    if (!email || !ftsRaw) continue;
+    const firstPvAt = firstPvRaw || null;
+    const signupAt = signupRaw || null;
+    const ftsAt = ftsRaw;
+    const ftsMs = new Date(ftsAt).getTime();
+    if (!isFinite(ftsMs)) continue;
+    const firstPvMs = firstPvAt ? new Date(firstPvAt).getTime() : NaN;
+    const signupMs = signupAt ? new Date(signupAt).getTime() : NaN;
+
+    const pvToSignup = (isFinite(firstPvMs) && isFinite(signupMs) && signupMs >= firstPvMs)
+      ? (signupMs - firstPvMs) / 1000 : null;
+    const signupToFts = (isFinite(signupMs) && ftsMs >= signupMs)
+      ? (ftsMs - signupMs) / 1000 : null;
+    const pvToFts = (isFinite(firstPvMs) && ftsMs >= firstPvMs)
+      ? (ftsMs - firstPvMs) / 1000 : null;
+
+    out.push({
+      email,
+      firstPvAt,
+      signupAt,
+      ftsAt,
+      initialUtmSource: utmSource ?? null,
+      initialReferrer: refDomain ?? null,
+      pvToSignupSec: pvToSignup,
+      signupToFtsSec: signupToFts,
+      pvToFtsSec: pvToFts,
+    });
+  }
+  return out;
 }
 
 export async function getConversionCountriesByEmail(): Promise<Map<string, CountryData>> {

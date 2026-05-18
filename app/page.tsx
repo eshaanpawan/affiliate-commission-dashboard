@@ -65,25 +65,26 @@ interface DashboardData {
   affiliateCountries: { affiliate_id: string; name: string; email: string; total: number; countries: { country_code: string; country_name: string; conversions: number }[] }[];
 }
 
-interface TtsAffiliate {
-  affiliateId: string;
-  name: string;
-  email: string | null;
-  linkToken: string | null;
-  ftsCount: number;
-  medianTtsSec: number | null;
-  meanTtsSec: number | null;
-  minTtsSec: number;
-  maxTtsSec: number;
-  sample: { email: string; ttsSec: number; signupAt: string; ftsAt: string }[];
+interface FunnelRow {
+  label: string;
+  source: 'google' | 'affiliate' | 'other' | 'affiliate_specific';
+  affiliateId?: string;
+  email?: string | null;
+  linkToken?: string | null;
+  pageviews: number | null;
+  signups: number;
+  fts: number;
+  pvToSignupRate: number | null;
+  signupToFtsRate: number | null;
+  signupToFtsSecMedian: number | null;
+  googleSimilarity?: number | null;
 }
 
 interface TtsResponse {
   window: { from: string; to: string };
   totalFts: number;
-  matchedFts?: number;
-  overall: { medianTtsSec: number | null; mean: number | null; count: number };
-  affiliates: TtsAffiliate[];
+  baselines: FunnelRow[];
+  affiliates: FunnelRow[];
   note?: string;
 }
 
@@ -709,7 +710,7 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Time-to-First-Purchase per Affiliate */}
+        {/* Funnel comparison: Google brand-search baseline vs each affiliate */}
         <div className="bg-white rounded-xl border border-gray-200 mb-8">
           <div
             className="px-5 py-4 border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50"
@@ -717,22 +718,13 @@ export default function Dashboard() {
           >
             <div>
               <h2 className="text-sm font-semibold text-gray-700">
-                Sign-up → First Purchase (Median TTS per affiliate)
+                Funnel vs Google Brand-Search Baseline
                 <span className="text-gray-400 ml-2">{ttsExpanded ? '▼' : '▶'}</span>
               </h2>
               <p className="text-xs text-gray-400 mt-0.5">
-                For affiliates whose customers converted (FTS) in the window. Short median = intercepted intent (likely brand bidding). Long median = genuine nurture.
+                Pageview → Signup → FTS counts + median Signup→FTS time. Affiliates whose timings match the Google baseline are likely intercepting brand-search intent (brand bidding).
               </p>
             </div>
-            {ttsData && (
-              <div className="text-right">
-                <p className="text-xs text-gray-400">Overall median</p>
-                <p className={`text-lg font-bold ${ttsTone(ttsData.overall.medianTtsSec)}`}>
-                  {fmtDuration(ttsData.overall.medianTtsSec)}
-                </p>
-                <p className="text-xs text-gray-400">{ttsData.overall.count} FTS total · {ttsData.matchedFts ?? 0} matched to affiliates</p>
-              </div>
-            )}
           </div>
           {ttsExpanded && (
             <div className="p-5">
@@ -752,7 +744,7 @@ export default function Dashboard() {
                   {ttsLoading ? 'Loading…' : 'Recompute'}
                 </button>
                 <span className="text-xs text-gray-400 ml-auto">
-                  Color: <span className="text-red-600 font-bold">red</span> &lt;1h · <span className="text-amber-600 font-semibold">amber</span> &lt;1d · <span className="text-gray-700">gray</span> &lt;1w · <span className="text-emerald-600">green</span> 1w+
+                  Signup→FTS time: <span className="text-red-600 font-bold">red</span> &lt;1h · <span className="text-amber-600 font-semibold">amber</span> &lt;1d · <span className="text-gray-700">gray</span> &lt;1w · <span className="text-emerald-600">green</span> 1w+
                 </span>
               </div>
 
@@ -762,25 +754,43 @@ export default function Dashboard() {
               {ttsData?.note && (
                 <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-3 mb-3">{ttsData.note}</div>
               )}
-              {ttsData && ttsData.affiliates.length > 0 && (
+              {ttsData && (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="text-xs text-gray-500 border-b border-gray-100">
-                        <th className="text-left px-2 py-2 font-medium">Affiliate</th>
-                        <th className="text-right px-2 py-2 font-medium">FTS in window</th>
-                        <th className="text-right px-2 py-2 font-medium">Median TTS</th>
-                        <th className="text-right px-2 py-2 font-medium">Mean TTS</th>
-                        <th className="text-right px-2 py-2 font-medium">Min</th>
-                        <th className="text-right px-2 py-2 font-medium">Max</th>
-                        <th className="text-left px-2 py-2 font-medium">Sample (shortest)</th>
+                      <tr className="text-xs text-gray-500 border-b border-gray-200">
+                        <th className="text-left px-2 py-2 font-medium">Source</th>
+                        <th className="text-right px-2 py-2 font-medium">Pageviews</th>
+                        <th className="text-right px-2 py-2 font-medium">Signups</th>
+                        <th className="text-right px-2 py-2 font-medium">FTS</th>
+                        <th className="text-right px-2 py-2 font-medium">PV→Signup</th>
+                        <th className="text-right px-2 py-2 font-medium">Signup→FTS</th>
+                        <th className="text-right px-2 py-2 font-medium">Signup→FTS time</th>
+                        <th className="text-left px-2 py-2 font-medium">vs Google</th>
                       </tr>
                     </thead>
                     <tbody>
+                      {/* Baseline rows */}
+                      {ttsData.baselines.map((r) => (
+                        <tr key={r.source} className="bg-indigo-50/40 border-b border-gray-100 font-medium">
+                          <td className="px-2 py-2.5 text-gray-900">{r.label}</td>
+                          <td className="px-2 py-2.5 text-right text-gray-700">{r.pageviews?.toLocaleString() ?? '—'}</td>
+                          <td className="px-2 py-2.5 text-right text-gray-700">{r.signups.toLocaleString()}</td>
+                          <td className="px-2 py-2.5 text-right text-gray-700">{r.fts.toLocaleString()}</td>
+                          <td className="px-2 py-2.5 text-right text-gray-500">{r.pvToSignupRate !== null ? `${(r.pvToSignupRate * 100).toFixed(2)}%` : '—'}</td>
+                          <td className="px-2 py-2.5 text-right text-gray-500">{r.signupToFtsRate !== null ? `${(r.signupToFtsRate * 100).toFixed(2)}%` : '—'}</td>
+                          <td className={`px-2 py-2.5 text-right ${ttsTone(r.signupToFtsSecMedian)}`}>{fmtDuration(r.signupToFtsSecMedian)}</td>
+                          <td className="px-2 py-2.5 text-gray-400 text-xs">—</td>
+                        </tr>
+                      ))}
+                      {/* Spacer + heading */}
+                      <tr><td colSpan={8} className="px-2 pt-4 pb-1 text-xs font-semibold uppercase text-gray-500">
+                        Per affiliate (sorted by similarity to Google baseline — highest = most likely intercepting brand search)
+                      </td></tr>
                       {ttsData.affiliates.map((a) => (
                         <tr key={a.affiliateId} className="border-b border-gray-50 hover:bg-gray-50">
                           <td className="px-2 py-2">
-                            <p className="font-medium text-gray-900 text-sm">{a.name}</p>
+                            <p className="font-medium text-gray-900 text-sm">{a.label}</p>
                             <p className="text-xs text-gray-400">{a.email}</p>
                             {a.linkToken && (
                               <a href={`https://runable.com/?via=${a.linkToken}`} target="_blank" rel="noreferrer"
@@ -790,18 +800,24 @@ export default function Dashboard() {
                               </a>
                             )}
                           </td>
-                          <td className="px-2 py-2 text-right font-medium text-gray-700">{a.ftsCount}</td>
-                          <td className={`px-2 py-2 text-right ${ttsTone(a.medianTtsSec)}`}>{fmtDuration(a.medianTtsSec)}</td>
-                          <td className="px-2 py-2 text-right text-gray-600">{fmtDuration(a.meanTtsSec)}</td>
-                          <td className="px-2 py-2 text-right text-gray-500">{fmtDuration(a.minTtsSec)}</td>
-                          <td className="px-2 py-2 text-right text-gray-500">{fmtDuration(a.maxTtsSec)}</td>
-                          <td className="px-2 py-2 text-xs text-gray-500">
-                            {a.sample.slice(0, 3).map((s, i) => (
-                              <div key={i} className="truncate max-w-[260px]">
-                                <span className="text-gray-400">{fmtDuration(s.ttsSec)}</span>
-                                <span className="ml-2 font-mono text-[10px]">{s.email}</span>
+                          <td className="px-2 py-2 text-right text-gray-400">—</td>
+                          <td className="px-2 py-2 text-right text-gray-700">{a.signups}</td>
+                          <td className="px-2 py-2 text-right font-semibold text-gray-900">{a.fts}</td>
+                          <td className="px-2 py-2 text-right text-gray-400">—</td>
+                          <td className="px-2 py-2 text-right text-gray-400">—</td>
+                          <td className={`px-2 py-2 text-right ${ttsTone(a.signupToFtsSecMedian)}`}>{fmtDuration(a.signupToFtsSecMedian)}</td>
+                          <td className="px-2 py-2 text-xs">
+                            {a.googleSimilarity !== null && a.googleSimilarity !== undefined ? (
+                              <div className="flex items-center gap-2">
+                                <div className="w-20 bg-gray-100 rounded-full h-2 overflow-hidden">
+                                  <div
+                                    className={`h-full ${a.googleSimilarity >= 0.7 ? 'bg-red-500' : a.googleSimilarity >= 0.5 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                    style={{ width: `${Math.round(a.googleSimilarity * 100)}%` }}
+                                  />
+                                </div>
+                                <span className="text-gray-500 tabular-nums">{Math.round(a.googleSimilarity * 100)}%</span>
                               </div>
-                            ))}
+                            ) : <span className="text-gray-300">n/a</span>}
                           </td>
                         </tr>
                       ))}
@@ -809,8 +825,8 @@ export default function Dashboard() {
                   </table>
                 </div>
               )}
-              {ttsData && ttsData.affiliates.length === 0 && !ttsLoading && (
-                <div className="text-sm text-gray-400 py-8 text-center">No affiliate-attributed FTS in this window.</div>
+              {ttsData && ttsData.affiliates.length === 0 && ttsData.baselines.length === 0 && !ttsLoading && (
+                <div className="text-sm text-gray-400 py-8 text-center">No PostHog FTS data for this window.</div>
               )}
             </div>
           )}
