@@ -270,10 +270,19 @@ export async function getFunnelTimingsForFTS(
   const fromIso = from.toISOString();
   const toIso = to.toISOString();
 
-  // Per-user aggregation: earliest pageview, earliest signup, earliest in-window FTS.
-  // Look back to 2025-01-01 to ensure we catch the first pageview/signup even for
-  // users who signed up well before their FTS.
+  // Pre-filter to users who had an FTS in window FIRST (CTE), then scan all events
+  // only for those users. Without this, the query scans 5+ months of all events
+  // for every distinct_id and hits PostHog's server-side 27s timeout.
   const query = `
+    WITH fts_users AS (
+      SELECT DISTINCT distinct_id
+      FROM events
+      WHERE event = 'subscription_updated'
+        AND properties.isUserFirstPaidPlan = true
+        AND properties.scenario = 'upgrade'
+        AND timestamp >= toDateTime('${fromIso}')
+        AND timestamp < toDateTime('${toIso}')
+    )
     SELECT
       events.distinct_id AS distinct_id,
       LOWER(MAX(CASE
@@ -287,16 +296,17 @@ export async function getFunnelTimingsForFTS(
         WHEN events.event = 'subscription_updated'
          AND events.properties.isUserFirstPaidPlan = true
          AND events.properties.scenario = 'upgrade'
+         AND events.timestamp >= toDateTime('${fromIso}')
+         AND events.timestamp < toDateTime('${toIso}')
         THEN events.timestamp ELSE NULL END) AS fts_at,
       any(person.properties.$initial_utm_source) AS initial_utm_source,
       any(person.properties.$initial_utm_campaign) AS initial_utm_campaign,
       any(person.properties.$initial_referring_domain) AS initial_referring_domain
     FROM events
-    WHERE events.timestamp >= toDateTime('2025-01-01')
+    WHERE events.distinct_id IN (SELECT distinct_id FROM fts_users)
+      AND events.timestamp >= toDateTime('2025-01-01')
     GROUP BY events.distinct_id
-    HAVING fts_at >= toDateTime('${fromIso}')
-       AND fts_at < toDateTime('${toIso}')
-       AND email IS NOT NULL
+    HAVING fts_at IS NOT NULL AND email IS NOT NULL
     LIMIT 50000
   `;
 
