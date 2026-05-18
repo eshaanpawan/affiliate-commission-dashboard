@@ -595,7 +595,7 @@ export default function FraudPage() {
     try {
       // Fire fraud + TTS in parallel. Fraud lands fast (<1s); TTS waits on PostHog (~3s).
       const fraudP = fetch('/api/fraud').then(r => r.json());
-      const ttsP = fetch('/api/affiliates/tts?from=2026-04-01&to=2026-06-01').then(r => r.json()).catch(() => null);
+      const ttsP = fetch('/api/affiliates/tts?from=2025-01-01&to=2027-01-01').then(r => r.json()).catch(() => null);
       const json = await fraudP;
       setData(json);
       ttsP.then((tts: { overall?: TtsOverall; affiliates?: { affiliateId?: string; signupToFtsSecMedian: number | null; googleSimilarity?: number | null; fts: number; signups?: number; pageviews?: number | null; signupToFtsRate?: number | null; countries?: { code: string; name: string; count: number }[] }[] }) => {

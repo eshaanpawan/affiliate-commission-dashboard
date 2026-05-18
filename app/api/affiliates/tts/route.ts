@@ -80,8 +80,9 @@ function rateOrNull(n: number, d: number | null): number | null {
 
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
-  const fromStr = sp.get('from') ?? '2026-04-01';
-  const toStr = sp.get('to') ?? '2026-06-01';
+  // Default = all-time (Runable's earliest data starts late 2025; 2027 is a future ceiling)
+  const fromStr = sp.get('from') ?? '2025-01-01';
+  const toStr = sp.get('to') ?? '2027-01-01';
   const from = new Date(fromStr + (fromStr.includes('T') ? '' : 'T00:00:00Z'));
   const to = new Date(toStr + (toStr.includes('T') ? '' : 'T00:00:00Z'));
 

@@ -204,8 +204,8 @@ export default function Dashboard() {
   const [ttsExpanded, setTtsExpanded] = useState(false);
   const [ttsData, setTtsData] = useState<TtsResponse | null>(null);
   const [ttsLoading, setTtsLoading] = useState(false);
-  const [ttsFrom, setTtsFrom] = useState('2026-04-01');
-  const [ttsTo, setTtsTo] = useState('2026-06-01');
+  const [ttsFrom, setTtsFrom] = useState('2025-01-01');
+  const [ttsTo, setTtsTo] = useState('2027-01-01');
 
   async function loadTts(from = ttsFrom, to = ttsTo) {
     setTtsLoading(true);
