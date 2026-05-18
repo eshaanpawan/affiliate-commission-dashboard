@@ -147,10 +147,10 @@ export async function getFunnelCountsBySource(
         MAX(events.event = 'subscription_updated'
             AND events.properties.isUserFirstPaidPlan = true
             AND events.properties.scenario = 'upgrade') AS had_fts,
-        MIN(CASE WHEN events.event = 'sign_up' THEN events.timestamp END) AS signup_at,
+        MIN(CASE WHEN events.event = 'sign_up' THEN events.timestamp ELSE NULL END) AS signup_at,
         MIN(CASE WHEN events.event = 'subscription_updated'
                   AND events.properties.isUserFirstPaidPlan = true
-                  AND events.properties.scenario = 'upgrade' THEN events.timestamp END) AS fts_at
+                  AND events.properties.scenario = 'upgrade' THEN events.timestamp ELSE NULL END) AS fts_at
       FROM events
       WHERE events.timestamp >= toDateTime('${fromIso}')
         AND events.timestamp < toDateTime('${toIso}')
@@ -210,13 +210,13 @@ export async function getFunnelTimingsForFTS(
         WHEN events.event = 'subscription_updated' THEN events.properties.email
         ELSE NULL
       END)) AS email,
-      MIN(CASE WHEN events.event = '$pageview' THEN events.timestamp END) AS first_pv_at,
-      MIN(CASE WHEN events.event = 'sign_up' THEN events.timestamp END) AS signup_at,
+      MIN(CASE WHEN events.event = '$pageview' THEN events.timestamp ELSE NULL END) AS first_pv_at,
+      MIN(CASE WHEN events.event = 'sign_up' THEN events.timestamp ELSE NULL END) AS signup_at,
       MIN(CASE
         WHEN events.event = 'subscription_updated'
          AND events.properties.isUserFirstPaidPlan = true
          AND events.properties.scenario = 'upgrade'
-        THEN events.timestamp END) AS fts_at,
+        THEN events.timestamp ELSE NULL END) AS fts_at,
       any(person.properties.$initial_utm_source) AS initial_utm_source,
       any(person.properties.$initial_referring_domain) AS initial_referring_domain
     FROM events
