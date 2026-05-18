@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/db';
-import { getFunnelTimingsForFTS, getFunnelCountsBySource, getSignupsByViaToken, getPageviewsByViaToken, FunnelTiming } from '@/lib/posthog';
+import { getFunnelTimingsForFTS, getFunnelCountsBySource, getSignupsByViaToken, getPageviewsByViaToken, getFtsByViaToken, FunnelTiming } from '@/lib/posthog';
 
 // PostHog HogQL queries can take 15-30s for a 2-month window — beyond the
 // default 10s Vercel limit. Set explicit 60s ceiling.
@@ -92,12 +92,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(cached.data);
   }
 
-  // 1. Pull FTS-window funnel timings + group counts + per-token signups + pageviews in parallel
-  const [timings, sourceCounts, signupsByToken, pageviewsByToken] = await Promise.all([
+  // 1. Pull FTS-window funnel timings + group counts + per-token signups + pageviews + FTS in parallel
+  const [timings, sourceCounts, signupsByToken, pageviewsByToken, ftsByToken] = await Promise.all([
     getFunnelTimingsForFTS(from, to),
     getFunnelCountsBySource(from, to),
     getSignupsByViaToken(from, to),
     getPageviewsByViaToken(from, to),
+    getFtsByViaToken(from, to),
   ]);
 
   if (timings.length === 0) {
@@ -110,21 +111,30 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const emails = timings.map(t => t.email.toLowerCase());
+  // 2. Resolve all via_tokens (from ftsByToken / signupsByToken / pageviewsByToken)
+  // to affiliate IDs via the referrals.link_token column. This is the unified
+  // attribution method — Signups, Pageviews, FTS all use it.
+  const allTokens = [...new Set([
+    ...ftsByToken.keys(),
+    ...signupsByToken.keys(),
+    ...pageviewsByToken.keys(),
+  ])];
 
-  // 2. Map emails to affiliates
-  const refRows = (await sql`
-    SELECT DISTINCT affiliate_id, LOWER(customer_email) AS customer_email
-    FROM referrals
-    WHERE LOWER(customer_email) = ANY(${emails}::text[])
-      AND affiliate_id IS NOT NULL
-  `) as unknown as ReferralCustomer[];
-  const emailToAffiliateId = new Map<string, string>();
-  for (const r of refRows) {
-    if (!emailToAffiliateId.has(r.customer_email)) emailToAffiliateId.set(r.customer_email, r.affiliate_id);
-  }
-  const affiliateIds = [...new Set(refRows.map(r => r.affiliate_id))];
+  const tokenAffRows = allTokens.length === 0 ? [] : (await sql`
+    SELECT DISTINCT ON (link_token)
+      link_token,
+      a.rewardful_id, a.first_name, a.last_name, a.email
+    FROM referrals r
+    JOIN affiliates a ON a.rewardful_id = r.affiliate_id
+    WHERE r.link_token = ANY(${allTokens}::text[])
+      AND r.affiliate_id IS NOT NULL
+    ORDER BY link_token, r.created_at ASC
+  `) as unknown as (AffiliateRow & { link_token: string })[];
 
+  const tokenToAffId = new Map<string, string>();
+  for (const r of tokenAffRows) tokenToAffId.set(r.link_token, r.rewardful_id);
+
+  const affiliateIds = [...new Set(tokenAffRows.map(r => r.rewardful_id))];
   const affRows = affiliateIds.length === 0 ? [] : (await sql`
     SELECT a.rewardful_id, a.first_name, a.last_name, a.email,
            link_stats.primary_link_token
@@ -139,16 +149,30 @@ export async function GET(req: NextRequest) {
   `) as unknown as AffiliateRow[];
   const affMap = new Map(affRows.map(a => [a.rewardful_id, a]));
 
-  // 3. Classify and bucket.
-  // Two top-level buckets: 'google' (brand-search baseline) and 'rest' (everything else,
-  // including affiliate-attributed traffic). Per-affiliate rows are also collected for
-  // the per-affiliate comparison.
+  // 3. Classify and bucket — for the per-user timings (used to compute median
+  // Signup→FTS time and similarity vs Google), we still attribute by email to
+  // referrals.customer_email since the per-user FTS query no longer carries
+  // via_token (too expensive to extract). This means the median time + similarity
+  // use email-based attribution while the FTS COUNT uses via_token. Slight
+  // inconsistency but the count column (the one user cares about) is now clean.
+  const emails = timings.map(t => t.email.toLowerCase());
+  const emailRefRows = emails.length === 0 ? [] : (await sql`
+    SELECT DISTINCT affiliate_id, LOWER(customer_email) AS customer_email
+    FROM referrals
+    WHERE LOWER(customer_email) = ANY(${emails}::text[])
+      AND affiliate_id IS NOT NULL
+  `) as unknown as ReferralCustomer[];
+  const emailToAffId = new Map<string, string>();
+  for (const r of emailRefRows) {
+    if (!emailToAffId.has(r.customer_email)) emailToAffId.set(r.customer_email, r.affiliate_id);
+  }
+
   const googleTimings: FunnelTiming[] = [];
   const restTimings: FunnelTiming[] = [];
   const byAffiliate = new Map<string, FunnelTiming[]>();
 
   for (const t of timings) {
-    const affId = emailToAffiliateId.get(t.email.toLowerCase());
+    const affId = emailToAffId.get(t.email.toLowerCase());
     if (affId) {
       const list = byAffiliate.get(affId) ?? [];
       list.push(t);
@@ -189,15 +213,32 @@ export async function GET(req: NextRequest) {
     signupToFtsSecMedian: restSignupToFts ?? sourceCounts.other.signupToFtsSec,
   };
 
-  // 5. Per-affiliate rows
+  // 5. Per-affiliate rows. Build for any affiliate that has at least one of:
+  //   - signups attributed by via_token
+  //   - pageviews attributed by via_token
+  //   - FTS attributed by via_token
+  //   - per-user timings matched by email (for median + similarity)
+  const affIdsToBuild = new Set<string>([
+    ...byAffiliate.keys(),
+    ...tokenToAffId.values(),
+  ]);
+
   const affiliateRows: FunnelRow[] = [];
-  for (const [affId, list] of byAffiliate) {
+  for (const affId of affIdsToBuild) {
     const aff = affMap.get(affId);
     if (!aff) continue;
+    const list = byAffiliate.get(affId) ?? [];
     const sf = list.map(t => t.signupToFtsSec).filter((x): x is number => x !== null);
     const med = median(sf);
 
-    // Similarity to Google baseline: log-distance comparison
+    // PostHog by-token counts (consistent attribution: $initial_current_url contains ?via=token)
+    const tok = aff.primary_link_token;
+    const phSignups = tok ? (signupsByToken.get(tok) ?? 0) : 0;
+    const phPageviews = tok ? (pageviewsByToken.get(tok) ?? 0) : 0;
+    const phFts = tok ? (ftsByToken.get(tok) ?? 0) : 0;
+    const suToFtsRate = phSignups > 0 ? phFts / phSignups : null;
+
+    // Similarity to Google baseline (uses email-matched per-user timings)
     let similarity: number | null = null;
     if (googleSignupToFts !== null && restSignupToFts !== null && med !== null && list.length >= 2 && googleSignupToFts !== restSignupToFts) {
       const ln = (x: number) => Math.log(Math.max(60, x));
@@ -207,7 +248,6 @@ export async function GET(req: NextRequest) {
       similarity = total === 0 ? 0.5 : dR / total;
     }
 
-    // Country breakdown of this affiliate's FTS customers (from PostHog $pageview geo)
     const countryCounts = new Map<string, { code: string; name: string; count: number }>();
     for (const t of list) {
       if (!t.countryCode) continue;
@@ -218,11 +258,6 @@ export async function GET(req: NextRequest) {
     }
     const countries = [...countryCounts.values()].sort((a, b) => b.count - a.count);
 
-    // PostHog signups + pageviews for this affiliate's primary token
-    const phSignups = aff.primary_link_token ? (signupsByToken.get(aff.primary_link_token) ?? 0) : 0;
-    const phPageviews = aff.primary_link_token ? (pageviewsByToken.get(aff.primary_link_token) ?? 0) : 0;
-    const suToFtsRate = phSignups > 0 ? list.length / phSignups : null;
-
     affiliateRows.push({
       label: [aff.first_name, aff.last_name].filter(Boolean).join(' ') || aff.email || '?',
       source: 'affiliate_specific',
@@ -231,7 +266,7 @@ export async function GET(req: NextRequest) {
       linkToken: aff.primary_link_token,
       pageviews: phPageviews,
       signups: phSignups,
-      fts: list.length,
+      fts: phFts,  // via_token attribution — consistent with signups + pageviews
       pvToSignupRate: null,
       signupToFtsRate: suToFtsRate,
       signupToFtsSecMedian: med,

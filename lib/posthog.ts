@@ -25,9 +25,10 @@ export interface FunnelTiming {
   firstPvAt: string | null;        // earliest $pageview for this user
   signupAt: string | null;
   ftsAt: string;
-  initialUtmSource: string | null;   // person property $initial_utm_source
-  initialUtmCampaign: string | null; // person property $initial_utm_campaign
-  initialReferrer: string | null;    // person property $initial_referring_domain
+  initialUtmSource: string | null;
+  initialUtmCampaign: string | null;
+  initialReferrer: string | null;
+  viaToken: string | null;         // extracted from person.$initial_current_url ?via=<token>
   countryCode: string | null;
   countryName: string | null;
   pvToSignupSec: number | null;
@@ -128,9 +129,10 @@ export interface FunnelCounts {
   signupToFtsSec: number | null; // overall median in this group
 }
 
-// Returns a Map<via_token, pageview_count> — how many distinct people had a
-// $pageview event on a URL containing ?via=<token> in the window. Counts each
-// distinct person once (not raw pageview events).
+// Returns a Map<via_token, unique_visitor_count> — distinct people whose
+// $initial_current_url contained ?via=<token>, AND who had at least one
+// $pageview event in the window. Uses $initial_current_url for consistency
+// with the signups + FTS queries (same attribution method across all 3).
 export async function getPageviewsByViaToken(
   from: Date,
   to: Date
@@ -139,13 +141,47 @@ export async function getPageviewsByViaToken(
   const toIso = to.toISOString();
   const query = `
     SELECT
-      extract(properties.$current_url, 'via=([a-zA-Z0-9_-]+)') AS via_token,
+      extract(person.properties.$initial_current_url, 'via=([a-zA-Z0-9_-]+)') AS via_token,
       COUNT(DISTINCT person_id) AS pageviews
     FROM events
     WHERE event = '$pageview'
       AND timestamp >= toDateTime('${fromIso}')
       AND timestamp < toDateTime('${toIso}')
-      AND properties.$current_url ILIKE '%via=%'
+      AND person.properties.$initial_current_url ILIKE '%via=%'
+    GROUP BY via_token
+  `;
+  const data = await runHogQL(query);
+  const out = new Map<string, number>();
+  if (!data || data.error) return out;
+  for (const row of data.results) {
+    const [token, count] = row as [string, number];
+    if (!token) continue;
+    out.set(token, Number(count));
+  }
+  return out;
+}
+
+// Returns a Map<via_token, fts_count> — distinct people whose first paid
+// subscription happened in window AND whose $initial_current_url contained
+// ?via=<token>. Uses the same attribution method as signups + pageviews
+// for clean cohort math.
+export async function getFtsByViaToken(
+  from: Date,
+  to: Date
+): Promise<Map<string, number>> {
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
+  const query = `
+    SELECT
+      extract(person.properties.$initial_current_url, 'via=([a-zA-Z0-9_-]+)') AS via_token,
+      COUNT(DISTINCT person_id) AS fts_count
+    FROM events
+    WHERE event = 'subscription_updated'
+      AND properties.isUserFirstPaidPlan = true
+      AND properties.scenario = 'upgrade'
+      AND timestamp >= toDateTime('${fromIso}')
+      AND timestamp < toDateTime('${toIso}')
+      AND person.properties.$initial_current_url ILIKE '%via=%'
     GROUP BY via_token
   `;
   const data = await runHogQL(query);
@@ -320,6 +356,9 @@ export async function getFunnelTimingsForFTS(
   for (const row of data.results) {
     const [, email, firstPvRaw, signupRaw, ftsRaw, utmSource, utmCampaign, refDomain] = row as
       [string, string, string | null, string | null, string, string | null, string | null, string | null];
+    // viaToken is no longer extracted here — too expensive in this aggregate.
+    // Use getFtsByViaToken() separately for via-attributed FTS counts.
+    const viaToken: string | null = null;
     const countryCode: string | null = null;
     const countryName: string | null = null;
     if (!email || !ftsRaw) continue;
@@ -346,6 +385,7 @@ export async function getFunnelTimingsForFTS(
       initialUtmSource: utmSource ?? null,
       initialUtmCampaign: utmCampaign ?? null,
       initialReferrer: refDomain ?? null,
+      viaToken: viaToken ?? null,
       countryCode: countryCode ?? null,
       countryName: countryName ?? null,
       pvToSignupSec: pvToSignup,
