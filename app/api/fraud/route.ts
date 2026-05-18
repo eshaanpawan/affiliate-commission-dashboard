@@ -75,7 +75,25 @@ export async function GET() {
         COALESCE(r_stats.total_referrals, 0) AS total_referrals,
         COALESCE(r_stats.total_conversions, 0) AS total_conversions,
         link_stats.primary_link_token AS primary_link_token
-      FROM affiliates a` : sql`
+      FROM affiliates a
+      LEFT JOIN (
+        SELECT affiliate_id,
+          COUNT(*) AS total_referrals,
+          COUNT(CASE WHEN status = 'converted' THEN 1 END) AS total_conversions
+        FROM referrals
+        WHERE status != 'deleted'
+        GROUP BY affiliate_id
+      ) r_stats ON r_stats.affiliate_id = a.rewardful_id
+      LEFT JOIN LATERAL (
+        SELECT link_token AS primary_link_token
+        FROM referrals
+        WHERE affiliate_id = a.rewardful_id AND link_token IS NOT NULL
+        GROUP BY link_token
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+      ) link_stats ON true
+      WHERE a.status != 'deleted'
+        AND COALESCE(r_stats.total_referrals, 0) > 0` : sql`
       SELECT
         a.rewardful_id, a.first_name, a.last_name, a.email, a.status, a.created_at,
         a.review_status, a.review_notes, a.reviewed_at, a.known_url,
