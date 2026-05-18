@@ -164,7 +164,33 @@ export async function GET(req: NextRequest) {
         a.unpaid_commission_cents AS commission_cents,
         link_stats.primary_link_token,
         COALESCE(a.fraud_tags, '[]'::jsonb) AS fraud_tags
-      FROM affiliates a` : sql`
+      FROM affiliates a
+      LEFT JOIN (
+        SELECT
+          affiliate_id,
+          COUNT(*) AS referrals,
+          COUNT(CASE WHEN status IN ('lead', 'converted') THEN 1 END) AS signups,
+          COUNT(CASE WHEN status = 'converted' THEN 1 END) AS conversions,
+          COUNT(CASE WHEN created_at >= CURRENT_DATE THEN 1 END) AS referrals_today,
+          COUNT(CASE WHEN status = 'converted' AND converted_at >= CURRENT_DATE THEN 1 END) AS conversions_today
+        FROM referrals WHERE status != 'deleted'
+        GROUP BY affiliate_id
+      ) r_stats ON r_stats.affiliate_id = a.rewardful_id
+      LEFT JOIN (
+        SELECT affiliate_id, SUM(amount_cents) AS revenue_cents
+        FROM sales WHERE status = 'created'
+        GROUP BY affiliate_id
+      ) s_stats ON s_stats.affiliate_id = a.rewardful_id
+      LEFT JOIN LATERAL (
+        SELECT link_token AS primary_link_token
+        FROM referrals
+        WHERE affiliate_id = a.rewardful_id AND link_token IS NOT NULL
+        GROUP BY link_token
+        ORDER BY COUNT(*) DESC
+        LIMIT 1
+      ) link_stats ON true
+      WHERE a.status != 'deleted'
+      ORDER BY conversions DESC, referrals DESC` : sql`
       SELECT
         a.rewardful_id,
         a.first_name,
