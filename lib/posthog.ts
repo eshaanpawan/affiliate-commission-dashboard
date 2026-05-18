@@ -161,11 +161,11 @@ export async function getFunnelCountsBySource(
         WHEN LOWER(COALESCE(initial_utm, '')) LIKE '%google%' OR LOWER(COALESCE(initial_ref, '')) LIKE '%google%' THEN 'google'
         ELSE 'other'
       END AS source,
-      COUNT(DISTINCT CASE WHEN had_pv THEN distinct_id END) AS pv_users,
-      COUNT(DISTINCT CASE WHEN had_signup THEN distinct_id END) AS signup_users,
-      COUNT(DISTINCT CASE WHEN had_fts THEN distinct_id END) AS fts_users,
+      COUNT(DISTINCT CASE WHEN had_pv THEN distinct_id ELSE NULL END) AS pv_users,
+      COUNT(DISTINCT CASE WHEN had_signup THEN distinct_id ELSE NULL END) AS signup_users,
+      COUNT(DISTINCT CASE WHEN had_fts THEN distinct_id ELSE NULL END) AS fts_users,
       MEDIAN(CASE WHEN had_fts AND signup_at IS NOT NULL AND fts_at IS NOT NULL
-                  THEN dateDiff('second', signup_at, fts_at) END) AS sf_median_sec
+                  THEN dateDiff('second', signup_at, fts_at) ELSE NULL END) AS sf_median_sec
     FROM user_funnel
     GROUP BY source
   `;

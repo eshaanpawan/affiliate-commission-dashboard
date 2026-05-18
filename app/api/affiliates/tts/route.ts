@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
       window: { from: from.toISOString(), to: to.toISOString() },
       baselines: [],
       affiliates: [],
-      note: 'No PostHog data — check POSTHOG_API_KEY / POSTHOG_PROJECT_ID env vars',
+      note: 'PostHog returned 0 funnel rows for this window. Either no FTS events occurred, env vars are missing, or the HogQL query errored — check server logs.',
     });
   }
 
