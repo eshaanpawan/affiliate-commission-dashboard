@@ -27,6 +27,8 @@ export interface FunnelTiming {
   ftsAt: string;
   initialUtmSource: string | null; // person property $initial_utm_source
   initialReferrer: string | null;  // person property $initial_referring_domain
+  countryCode: string | null;      // $geoip_country_code from $pageview
+  countryName: string | null;      // $geoip_country_name from $pageview
   pvToSignupSec: number | null;    // signup - first_pv
   signupToFtsSec: number | null;   // fts - signup
   pvToFtsSec: number | null;       // fts - first_pv (full funnel)
@@ -218,7 +220,9 @@ export async function getFunnelTimingsForFTS(
          AND events.properties.scenario = 'upgrade'
         THEN events.timestamp ELSE NULL END) AS fts_at,
       any(person.properties.$initial_utm_source) AS initial_utm_source,
-      any(person.properties.$initial_referring_domain) AS initial_referring_domain
+      any(person.properties.$initial_referring_domain) AS initial_referring_domain,
+      argMax(events.properties.$geoip_country_code, events.timestamp) AS country_code,
+      argMax(events.properties.$geoip_country_name, events.timestamp) AS country_name
     FROM events
     WHERE events.timestamp >= toDateTime('2025-01-01')
     GROUP BY events.distinct_id
@@ -236,8 +240,8 @@ export async function getFunnelTimingsForFTS(
 
   const out: FunnelTiming[] = [];
   for (const row of data.results) {
-    const [, email, firstPvRaw, signupRaw, ftsRaw, utmSource, refDomain] = row as
-      [string, string, string | null, string | null, string, string | null, string | null];
+    const [, email, firstPvRaw, signupRaw, ftsRaw, utmSource, refDomain, countryCode, countryName] = row as
+      [string, string, string | null, string | null, string, string | null, string | null, string | null, string | null];
     if (!email || !ftsRaw) continue;
     const firstPvAt = firstPvRaw || null;
     const signupAt = signupRaw || null;
@@ -261,6 +265,8 @@ export async function getFunnelTimingsForFTS(
       ftsAt,
       initialUtmSource: utmSource ?? null,
       initialReferrer: refDomain ?? null,
+      countryCode: countryCode ?? null,
+      countryName: countryName ?? null,
       pvToSignupSec: pvToSignup,
       signupToFtsSec: signupToFts,
       pvToFtsSec: pvToFts,

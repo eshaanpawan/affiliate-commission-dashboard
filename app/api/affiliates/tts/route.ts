@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/db';
 import { getFunnelTimingsForFTS, getFunnelCountsBySource, FunnelTiming } from '@/lib/posthog';
 
+// PostHog HogQL queries can take 15-30s for a 2-month window — beyond the
+// default 10s Vercel limit. Set explicit 60s ceiling.
+export const maxDuration = 60;
+
+// Light in-memory cache keyed by window (5-minute TTL). Survives within a
+// warm function instance; cold starts will repeat the work.
+const CACHE = new Map<string, { at: number; data: unknown }>();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
 // Per-affiliate funnel comparison vs Google brand-search baseline.
 //
 // For each source / affiliate, returns:
@@ -39,6 +48,8 @@ interface FunnelRow {
   signupToFtsSecMedian: number | null;
   // Similarity to Google baseline (0..1) — higher = more like brand-search interception
   googleSimilarity?: number | null;
+  // Per-affiliate country breakdown of FTS customers
+  countries?: { code: string; name: string; count: number }[];
 }
 
 interface ReferralCustomer {
@@ -71,6 +82,12 @@ export async function GET(req: NextRequest) {
   const toStr = sp.get('to') ?? '2026-06-01';
   const from = new Date(fromStr + (fromStr.includes('T') ? '' : 'T00:00:00Z'));
   const to = new Date(toStr + (toStr.includes('T') ? '' : 'T00:00:00Z'));
+
+  const cacheKey = `${from.toISOString()}|${to.toISOString()}`;
+  const cached = CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    return NextResponse.json(cached.data);
+  }
 
   // 1. Pull FTS-window funnel timings (per user) + group counts (per source)
   const [timings, sourceCounts] = await Promise.all([
@@ -184,6 +201,17 @@ export async function GET(req: NextRequest) {
       similarity = total === 0 ? 0.5 : dR / total;
     }
 
+    // Country breakdown of this affiliate's FTS customers (from PostHog $pageview geo)
+    const countryCounts = new Map<string, { code: string; name: string; count: number }>();
+    for (const t of list) {
+      if (!t.countryCode) continue;
+      const key = t.countryCode;
+      const ex = countryCounts.get(key);
+      if (ex) ex.count++;
+      else countryCounts.set(key, { code: t.countryCode, name: t.countryName ?? t.countryCode, count: 1 });
+    }
+    const countries = [...countryCounts.values()].sort((a, b) => b.count - a.count);
+
     affiliateRows.push({
       label: [aff.first_name, aff.last_name].filter(Boolean).join(' ') || aff.email || '?',
       source: 'affiliate_specific',
@@ -197,6 +225,7 @@ export async function GET(req: NextRequest) {
       signupToFtsRate: null,
       signupToFtsSecMedian: med,
       googleSimilarity: similarity,
+      countries,
     });
   }
 
@@ -208,7 +237,7 @@ export async function GET(req: NextRequest) {
     return b.fts - a.fts;
   });
 
-  return NextResponse.json({
+  const payload = {
     window: { from: from.toISOString(), to: to.toISOString() },
     totalFts: timings.length,
     overall: {
@@ -220,5 +249,7 @@ export async function GET(req: NextRequest) {
     },
     baselines: [googleRow, restRow],
     affiliates: affiliateRows,
-  });
+  };
+  CACHE.set(cacheKey, { at: Date.now(), data: payload });
+  return NextResponse.json(payload);
 }

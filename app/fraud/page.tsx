@@ -168,8 +168,9 @@ function googleSiteSearchUrl(name: string) {
   return `https://www.google.com/search?q=${encodeURIComponent(`"${name}" runable affiliate`)}`;
 }
 
-function FraudModal({ affiliate, onClose, onReviewUpdate }: {
+function FraudModal({ affiliate, tts, onClose, onReviewUpdate }: {
   affiliate: FraudAffiliate;
+  tts?: TtsPerAffiliate;
   onClose: () => void;
   onReviewUpdate: (id: string, patch: Partial<FraudAffiliate>) => void;
 }) {
@@ -293,6 +294,26 @@ function FraudModal({ affiliate, onClose, onReviewUpdate }: {
                 tone={affiliate.risk.band === 'high' ? 'danger' : undefined} />
           <Stat label="Already paid" value={fmt(affiliate.paidCommissionCents)} />
         </div>
+
+        {/* Country breakdown of FTS customers (from PostHog $pageview geo) */}
+        {tts?.countries && tts.countries.length > 0 && (
+          <div className="mb-5">
+            <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Where this affiliate's paid customers come from</h3>
+            <div className="flex flex-wrap gap-2">
+              {tts.countries.slice(0, 12).map((c) => (
+                <div key={c.code} className="inline-flex items-center gap-1.5 bg-gray-50 rounded-md px-2 py-1 text-xs">
+                  <span className="font-medium text-gray-900">{c.name}</span>
+                  <span className="text-gray-500">·</span>
+                  <span className="font-mono text-indigo-600">{c.count}</span>
+                </div>
+              ))}
+              {tts.countries.length > 12 && (
+                <span className="text-xs text-gray-400 self-center">+{tts.countries.length - 12} more</span>
+              )}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1.5">From PostHog $geoip_country on the customer's latest pageview. Shows {tts.countries.reduce((s, c) => s + c.count, 0)} of {tts.fts} matched FTS (rest had no geo data).</p>
+          </div>
+        )}
 
         {/* Signals */}
         {affiliate.risk.signals.length === 0 ? (
@@ -494,6 +515,7 @@ interface TtsPerAffiliate {
   signupToFtsSecMedian: number | null;
   googleSimilarity: number | null | undefined;
   fts: number;
+  countries?: { code: string; name: string; count: number }[];
 }
 
 interface TtsOverall {
@@ -534,7 +556,7 @@ export default function FraudPage() {
       const ttsP = fetch('/api/affiliates/tts?from=2026-04-01&to=2026-06-01').then(r => r.json()).catch(() => null);
       const json = await fraudP;
       setData(json);
-      ttsP.then((tts: { overall?: TtsOverall; affiliates?: { affiliateId?: string; signupToFtsSecMedian: number | null; googleSimilarity?: number | null; fts: number }[] }) => {
+      ttsP.then((tts: { overall?: TtsOverall; affiliates?: { affiliateId?: string; signupToFtsSecMedian: number | null; googleSimilarity?: number | null; fts: number; countries?: { code: string; name: string; count: number }[] }[] }) => {
         if (tts?.overall) setTtsOverall(tts.overall);
         if (!tts?.affiliates) return;
         const m = new Map<string, TtsPerAffiliate>();
@@ -543,6 +565,7 @@ export default function FraudPage() {
             signupToFtsSecMedian: r.signupToFtsSecMedian,
             googleSimilarity: r.googleSimilarity,
             fts: r.fts,
+            countries: r.countries,
           });
         }
         setTtsByAffId(m);
@@ -600,7 +623,7 @@ export default function FraudPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {selected && <FraudModal affiliate={selected} onClose={() => setSelected(null)} onReviewUpdate={updateAffiliate} />}
+      {selected && <FraudModal affiliate={selected} tts={ttsByAffId.get(selected.id)} onClose={() => setSelected(null)} onReviewUpdate={updateAffiliate} />}
 
       <div className="max-w-[112rem] mx-auto px-4 py-8">
         {/* Header */}
