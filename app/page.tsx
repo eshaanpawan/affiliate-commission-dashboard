@@ -31,6 +31,7 @@ interface Affiliate {
   revenueCents: number;
   commissionCents: number;
   linkToken: string | null;
+  linkTokens: { token: string; count: number }[];
   fraudTags: string[];
 }
 
@@ -776,18 +777,22 @@ export default function Dashboard() {
                         <p className="font-medium text-gray-900">{a.name}</p>
                         <p className="text-xs text-gray-400">{a.email}</p>
                         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                          {a.linkToken && (
+                          {(a.linkTokens && a.linkTokens.length > 0
+                            ? a.linkTokens
+                            : a.linkToken ? [{ token: a.linkToken, count: 0 }] : []
+                          ).map((lt, i) => (
                             <a
-                              href={`https://runable.com/?via=${a.linkToken}`}
+                              key={lt.token}
+                              href={`https://runable.com/?via=${lt.token}`}
                               target="_blank"
                               rel="noreferrer"
                               onClick={(e) => e.stopPropagation()}
-                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
-                              title="Open affiliate funnel"
+                              className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${i === 0 ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100' : 'bg-amber-50 text-amber-700 hover:bg-amber-100'}`}
+                              title={i === 0 ? `Primary link · ${lt.count} clicks` : `Secondary link · ${lt.count} clicks · investigate`}
                             >
-                              ?via={a.linkToken}
+                              ?via={lt.token}{lt.count > 0 ? <span className="opacity-60"> · {lt.count}</span> : null}
                             </a>
-                          )}
+                          ))}
                           {a.fraudTags.length > 0 && a.fraudTags.map((t) => (
                             <span key={t} className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-50 text-red-700">
                               🚩 {t.replace(/_/g, ' ')}

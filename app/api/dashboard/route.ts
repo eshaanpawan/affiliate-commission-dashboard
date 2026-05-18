@@ -163,6 +163,7 @@ export async function GET(req: NextRequest) {
         COALESCE(s_stats.revenue_cents, 0) AS revenue_cents,
         a.unpaid_commission_cents AS commission_cents,
         link_stats.primary_link_token,
+        link_stats.link_tokens,
         COALESCE(a.fraud_tags, '[]'::jsonb) AS fraud_tags
       FROM affiliates a
       LEFT JOIN (
@@ -182,12 +183,15 @@ export async function GET(req: NextRequest) {
         GROUP BY affiliate_id
       ) s_stats ON s_stats.affiliate_id = a.rewardful_id
       LEFT JOIN LATERAL (
-        SELECT link_token AS primary_link_token
-        FROM referrals
-        WHERE affiliate_id = a.rewardful_id AND link_token IS NOT NULL
-        GROUP BY link_token
-        ORDER BY COUNT(*) DESC
-        LIMIT 1
+        SELECT
+          (ARRAY_AGG(link_token ORDER BY cnt DESC))[1] AS primary_link_token,
+          jsonb_agg(jsonb_build_object('token', link_token, 'count', cnt) ORDER BY cnt DESC) AS link_tokens
+        FROM (
+          SELECT link_token, COUNT(*) AS cnt
+          FROM referrals
+          WHERE affiliate_id = a.rewardful_id AND link_token IS NOT NULL
+          GROUP BY link_token
+        ) t
       ) link_stats ON true
       WHERE a.status != 'deleted'
       ORDER BY conversions DESC, referrals DESC` : sql`
@@ -206,6 +210,7 @@ export async function GET(req: NextRequest) {
         COALESCE(s_stats.revenue_cents, 0) AS revenue_cents,
         a.unpaid_commission_cents AS commission_cents,
         link_stats.primary_link_token,
+        link_stats.link_tokens,
         '[]'::jsonb AS fraud_tags
       FROM affiliates a
       LEFT JOIN (
@@ -225,12 +230,15 @@ export async function GET(req: NextRequest) {
         GROUP BY affiliate_id
       ) s_stats ON s_stats.affiliate_id = a.rewardful_id
       LEFT JOIN LATERAL (
-        SELECT link_token AS primary_link_token
-        FROM referrals
-        WHERE affiliate_id = a.rewardful_id AND link_token IS NOT NULL
-        GROUP BY link_token
-        ORDER BY COUNT(*) DESC
-        LIMIT 1
+        SELECT
+          (ARRAY_AGG(link_token ORDER BY cnt DESC))[1] AS primary_link_token,
+          jsonb_agg(jsonb_build_object('token', link_token, 'count', cnt) ORDER BY cnt DESC) AS link_tokens
+        FROM (
+          SELECT link_token, COUNT(*) AS cnt
+          FROM referrals
+          WHERE affiliate_id = a.rewardful_id AND link_token IS NOT NULL
+          GROUP BY link_token
+        ) t
       ) link_stats ON true
       WHERE a.status != 'deleted'
       ORDER BY conversions DESC, referrals DESC
@@ -405,6 +413,7 @@ export async function GET(req: NextRequest) {
       revenueCents: Number(a.revenue_cents),
       commissionCents: Number(a.commission_cents),
       linkToken: a.primary_link_token,
+      linkTokens: Array.isArray(a.link_tokens) ? a.link_tokens as { token: string; count: number }[] : [],
       fraudTags: Array.isArray(a.fraud_tags) ? a.fraud_tags : [],
     })),
     recentActivity: recentEvents,
