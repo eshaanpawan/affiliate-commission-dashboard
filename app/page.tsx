@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { MetricCard } from '@/components/MetricCard';
 import { DayOnDayChart } from '@/components/DayOnDayChart';
 import { TopAffiliatesPie } from '@/components/TopAffiliatesPie';
+import { fmtCents as fmt, pct, fmtDuration, ttsTone, similarityTone } from '@/lib/format';
 import {
   ResponsiveContainer,
   BarChart,
@@ -23,6 +24,7 @@ interface Affiliate {
   status: string;
   createdAt: string;
   referrals: number;
+  signups: number;
   conversions: number;
   referralsToday: number;
   conversionsToday: number;
@@ -92,35 +94,6 @@ interface AffiliateDetail {
   dailyReferrals: { day: string; total: number; converted: number }[];
   dailyRevenue: { day: string; usd: number }[];
   dailyCommissions: { day: string; usd: number }[];
-}
-
-function fmt(cents: number) {
-  return '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function pct(a: number, b: number) {
-  if (b === 0) return '0%';
-  return ((a / b) * 100).toFixed(1) + '%';
-}
-
-function fmtDuration(sec: number | null): string {
-  if (sec === null || !isFinite(sec)) return '—';
-  if (sec < 60) return `${Math.round(sec)}s`;
-  if (sec < 3600) return `${Math.round(sec / 60)}m`;
-  if (sec < 86400) {
-    const h = sec / 3600;
-    return h < 10 ? `${h.toFixed(1)}h` : `${Math.round(h)}h`;
-  }
-  const d = sec / 86400;
-  return d < 10 ? `${d.toFixed(1)}d` : `${Math.round(d)}d`;
-}
-
-function ttsTone(sec: number | null): string {
-  if (sec === null) return 'text-gray-400';
-  if (sec < 3600) return 'text-red-600 font-bold';        // <1 hour — high suspicion
-  if (sec < 86400) return 'text-amber-600 font-semibold'; // <1 day — moderate
-  if (sec < 7 * 86400) return 'text-gray-700';            // <1 week — normal
-  return 'text-emerald-600';                                // 1+ week — healthy nurture
 }
 
 type SortKey = 'referrals' | 'conversions' | 'revenueCents' | 'commissionCents';
@@ -247,16 +220,38 @@ export default function Dashboard() {
 
   async function load(p?: string) {
     try {
-      const res = await fetch(`/api/dashboard?period=${p ?? period}`);
-      const json = await res.json();
+      // Fire dashboard + TTS in parallel; show dashboard immediately, fill TTS columns when it lands.
+      const dashPromise = fetch(`/api/dashboard?period=${p ?? period}`).then(r => r.json());
+      const ttsPromise = (ttsData
+        ? Promise.resolve(ttsData)
+        : fetch(`/api/affiliates/tts?from=${ttsFrom}&to=${ttsTo}`).then(r => r.json()).catch(() => null));
+
+      const json = await dashPromise;
       setData(json);
       setLastUpdated(new Date());
+
+      // Background: resolve TTS and merge
+      ttsPromise.then(tts => { if (tts) setTtsData(tts); }).catch(() => {});
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
   }
+
+  // Per-affiliate TTS lookup, used to fill the "Signup→Pay" and "vs Google" columns inline.
+  const ttsByAffiliateId = useMemo(() => {
+    const m = new Map<string, { signupToFtsSecMedian: number | null; googleSimilarity: number | null | undefined; fts: number }>();
+    if (!ttsData?.affiliates) return m;
+    for (const r of ttsData.affiliates) {
+      if (r.affiliateId) m.set(r.affiliateId, {
+        signupToFtsSecMedian: r.signupToFtsSecMedian,
+        googleSimilarity: r.googleSimilarity,
+        fts: r.fts,
+      });
+    }
+    return m;
+  }, [ttsData]);
 
   async function sync() {
     if (syncing) return;
@@ -656,18 +651,22 @@ export default function Dashboard() {
                 <thead>
                   <tr className="text-xs text-gray-500 border-b border-gray-100">
                     <th className="text-left px-5 py-3 font-medium">Affiliate</th>
-                    <th className="text-right px-4 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('referrals')}>Referrals<SortIcon col="referrals" /></th>
-                    <th className="text-right px-4 py-3 font-medium text-indigo-600">Referrals Today</th>
-                    <th className="text-right px-4 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('conversions')}>Conversions<SortIcon col="conversions" /></th>
-                    <th className="text-right px-4 py-3 font-medium text-green-600">Conversions Today</th>
-                    <th className="text-right px-4 py-3 font-medium">Conv. Rate</th>
-                    <th className="text-right px-4 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('revenueCents')}>Revenue<SortIcon col="revenueCents" /></th>
-                    <th className="text-right px-4 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('commissionCents')}>Commission<SortIcon col="commissionCents" /></th>
-                    <th className="text-left px-4 py-3 font-medium">Status</th>
+                    <th title="Total referrals — anyone who clicked ?via=token (visitor + lead + paid)" className="text-right px-3 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('referrals')}>Clicks<SortIcon col="referrals" /></th>
+                    <th title="Subset of clicks who created a Runable account (Rewardful lead + converted)" className="text-right px-3 py-3 font-medium">Signups</th>
+                    <th title="Subset of signups who paid (first-time paid subscription = Rewardful 'converted')" className="text-right px-3 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('conversions')}>Paid<SortIcon col="conversions" /></th>
+                    <th title="Clicks today / Paid today" className="text-right px-3 py-3 font-medium">Today</th>
+                    <th title="Paid / Clicks (Rewardful conversion rate)" className="text-right px-3 py-3 font-medium">Click→Pay</th>
+                    <th title="Median time between sign_up event and first paid subscription (FTS) for users attributed to this affiliate. Short = intercepted intent; long = healthy nurture." className="text-right px-3 py-3 font-medium">Signup→Pay</th>
+                    <th title="Similarity of Signup→Pay time to the Google brand-search baseline. 100% = identical to brand-intercept pattern (likely brand bidding); 0% = identical to organic/direct." className="text-left px-3 py-3 font-medium">vs Google</th>
+                    <th className="text-right px-3 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('revenueCents')}>Revenue<SortIcon col="revenueCents" /></th>
+                    <th className="text-right px-3 py-3 font-medium cursor-pointer select-none hover:text-gray-800" onClick={() => handleSort('commissionCents')}>Commission<SortIcon col="commissionCents" /></th>
+                    <th title="Rewardful account status (active / inactive)" className="text-left px-3 py-3 font-medium">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {affiliates.map((a) => (
+                  {affiliates.map((a) => {
+                    const tts = ttsByAffiliateId.get(a.id);
+                    return (
                     <tr key={a.id} className="border-b border-gray-50 hover:bg-indigo-50 transition-colors cursor-pointer" onClick={() => setSelectedAffiliate(a)}>
                       <td className="px-5 py-3">
                         <p className="font-medium text-gray-900">{a.name}</p>
@@ -692,18 +691,34 @@ export default function Dashboard() {
                           ))}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-right text-gray-700">{a.referrals}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-indigo-600">{a.referralsToday}</td>
-                      <td className="px-4 py-3 text-right text-gray-700">{a.conversions}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-green-600">{a.conversionsToday}</td>
-                      <td className="px-4 py-3 text-right text-gray-500">{pct(a.conversions, a.referrals)}</td>
-                      <td className="px-4 py-3 text-right font-medium text-gray-900">{fmt(a.revenueCents)}</td>
-                      <td className="px-4 py-3 text-right text-amber-600 font-medium">{fmt(a.commissionCents)}</td>
-                      <td className="px-4 py-3">
+                      <td className="px-3 py-3 text-right text-gray-700">{a.referrals}</td>
+                      <td className="px-3 py-3 text-right text-gray-700">{a.signups}</td>
+                      <td className="px-3 py-3 text-right font-medium text-gray-900">{a.conversions}</td>
+                      <td className="px-3 py-3 text-right text-xs">
+                        <span className="text-indigo-600 font-semibold">{a.referralsToday}</span>
+                        <span className="text-gray-300 mx-0.5">/</span>
+                        <span className="text-green-600 font-semibold">{a.conversionsToday}</span>
+                      </td>
+                      <td className="px-3 py-3 text-right text-gray-500">{pct(a.conversions, a.referrals)}</td>
+                      <td className={`px-3 py-3 text-right ${ttsTone(tts?.signupToFtsSecMedian ?? null)}`}>{tts ? fmtDuration(tts.signupToFtsSecMedian) : (ttsData ? '—' : <span className="text-gray-300 animate-pulse">…</span>)}</td>
+                      <td className="px-3 py-3 text-xs">
+                        {tts && tts.googleSimilarity !== null && tts.googleSimilarity !== undefined ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-16 bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                              <div className={`h-full ${similarityTone(tts.googleSimilarity)}`} style={{ width: `${Math.round(tts.googleSimilarity * 100)}%` }} />
+                            </div>
+                            <span className="text-gray-500 tabular-nums text-[10px]">{Math.round(tts.googleSimilarity * 100)}%</span>
+                          </div>
+                        ) : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-3 py-3 text-right font-medium text-gray-900">{fmt(a.revenueCents)}</td>
+                      <td className="px-3 py-3 text-right text-amber-600 font-medium">{fmt(a.commissionCents)}</td>
+                      <td className="px-3 py-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${a.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{a.status}</span>
                       </td>
                     </tr>
-                  ))}
+                  );
+                  })}
                 </tbody>
               </table>
             </div>

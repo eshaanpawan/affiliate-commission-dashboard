@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
+import { fmtDuration, ttsTone, similarityTone } from '@/lib/format';
 
 interface RiskSignal {
   key: string;
@@ -462,19 +463,40 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: 'da
 
 type FilterKey = 'all' | 'high' | 'medium' | 'unreviewed' | 'flagged' | 'tagged' | 'brand_bidding';
 
+interface TtsPerAffiliate {
+  signupToFtsSecMedian: number | null;
+  googleSimilarity: number | null | undefined;
+  fts: number;
+}
+
 export default function FraudPage() {
   const [data, setData] = useState<FraudListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterKey>('high');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<FraudAffiliate | null>(null);
+  const [ttsByAffId, setTtsByAffId] = useState<Map<string, TtsPerAffiliate>>(new Map());
 
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch('/api/fraud');
-      const json = await res.json();
+      // Fire fraud + TTS in parallel. Fraud lands fast (<1s); TTS waits on PostHog (~3s).
+      const fraudP = fetch('/api/fraud').then(r => r.json());
+      const ttsP = fetch('/api/affiliates/tts?from=2026-04-01&to=2026-06-01').then(r => r.json()).catch(() => null);
+      const json = await fraudP;
       setData(json);
+      ttsP.then((tts: { affiliates?: { affiliateId?: string; signupToFtsSecMedian: number | null; googleSimilarity?: number | null; fts: number }[] }) => {
+        if (!tts?.affiliates) return;
+        const m = new Map<string, TtsPerAffiliate>();
+        for (const r of tts.affiliates) {
+          if (r.affiliateId) m.set(r.affiliateId, {
+            signupToFtsSecMedian: r.signupToFtsSecMedian,
+            googleSimilarity: r.googleSimilarity,
+            fts: r.fts,
+          });
+        }
+        setTtsByAffId(m);
+      }).catch(() => {});
     } finally {
       setLoading(false);
     }
@@ -614,19 +636,24 @@ export default function FraudPage() {
               <thead>
                 <tr className="text-xs text-gray-500 border-b border-gray-100">
                   <th className="text-left px-4 py-3 font-medium">Affiliate</th>
-                  <th className="text-right px-3 py-3 font-medium">Risk</th>
-                  <th className="text-left px-3 py-3 font-medium">Top signals</th>
-                  <th className="text-right px-3 py-3 font-medium">Refs</th>
-                  <th className="text-right px-3 py-3 font-medium">Conv %</th>
-                  <th className="text-right px-3 py-3 font-medium" title="Self-referral / shared customer / refund">SR / SC / Rf</th>
-                  <th className="text-right px-3 py-3 font-medium">gclid %</th>
-                  <th className="text-right px-3 py-3 font-medium">Instant %</th>
-                  <th className="text-right px-3 py-3 font-medium">Unpaid</th>
-                  <th className="text-right px-4 py-3 font-medium">Status</th>
+                  <th title="0-100 weighted risk score. ≥60 = high, 30-60 = medium." className="text-right px-3 py-3 font-medium">Risk</th>
+                  <th title="Top 3 fraud signals that fired for this affiliate. Hover each pill for details." className="text-left px-3 py-3 font-medium">Top signals</th>
+                  <th title="Total referrals — anyone who clicked ?via=token" className="text-right px-3 py-3 font-medium">Clicks</th>
+                  <th title="Paid / Clicks. Rewardful conversion rate. >40% is suspicious for SaaS content affiliates." className="text-right px-3 py-3 font-medium">Click→Pay</th>
+                  <th title="Conversions where customer email matches affiliate's own email (Gmail-alias aware). >0 = near-certain self-referral fraud." className="text-right px-3 py-3 font-medium">Self-ref</th>
+                  <th title="Customer emails also seen under other affiliates. Attribution theft / ring fraud." className="text-right px-3 py-3 font-medium">Shared cust</th>
+                  <th title="% of commissions in voided/refunded/deleted state. ≥15% suggests stolen-card or refund-recommission fraud." className="text-right px-3 py-3 font-medium">Refund %</th>
+                  <th title="% of converted referrals where click→paid happened in <5 minutes. Classic brand-bidding fingerprint." className="text-right px-3 py-3 font-medium">Instant %</th>
+                  <th title="Median time between sign_up event and first paid subscription (FTS). Short = intercepted intent." className="text-right px-3 py-3 font-medium">Signup→Pay</th>
+                  <th title="Similarity of Signup→Pay time to the Google brand-search baseline. 100% = likely brand bidding." className="text-left px-3 py-3 font-medium">vs Google</th>
+                  <th title="Unpaid commission balance — money at risk if affiliate is fraud." className="text-right px-3 py-3 font-medium">Unpaid</th>
+                  <th title="Your manual review state: unreviewed / flagged / cleared / paused." className="text-right px-4 py-3 font-medium">Review</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((a) => (
+                {filtered.map((a) => {
+                  const tts = ttsByAffId.get(a.id);
+                  return (
                   <tr key={a.id} className="border-b border-gray-50 hover:bg-indigo-50 transition-colors cursor-pointer" onClick={() => setSelected(a)}>
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900">{a.name}</p>
@@ -665,25 +692,38 @@ export default function FraudPage() {
                     <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.convRate > 0.4 ? 'text-red-600' : 'text-gray-700'}`}>
                       {(a.risk.stats.convRate * 100).toFixed(0)}%
                     </td>
-                    <td className="px-3 py-3 text-right text-xs">
-                      <span className={a.risk.stats.selfReferralCount > 0 ? 'text-red-600 font-bold' : 'text-gray-300'}>{a.risk.stats.selfReferralCount}</span>
-                      <span className="text-gray-300 mx-0.5">/</span>
-                      <span className={a.risk.stats.sharedCustomerCount > 0 ? 'text-orange-600 font-bold' : 'text-gray-300'}>{a.risk.stats.sharedCustomerCount}</span>
-                      <span className="text-gray-300 mx-0.5">/</span>
-                      <span className={a.risk.stats.refundRate >= 0.15 ? 'text-amber-600 font-bold' : 'text-gray-300'}>{a.risk.stats.refundRate > 0 ? (a.risk.stats.refundRate * 100).toFixed(0) + '%' : '—'}</span>
+                    <td className={`px-3 py-3 text-right text-xs ${a.risk.stats.selfReferralCount > 0 ? 'text-red-600 font-bold' : 'text-gray-300'}`}>
+                      {a.risk.stats.selfReferralCount > 0 ? a.risk.stats.selfReferralCount : '—'}
                     </td>
-                    <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.gclidPct > 0.15 ? 'text-red-600' : 'text-gray-400'}`}>
-                      {a.risk.stats.gclidPct > 0 ? `${(a.risk.stats.gclidPct * 100).toFixed(0)}%` : '—'}
+                    <td className={`px-3 py-3 text-right text-xs ${a.risk.stats.sharedCustomerCount > 0 ? 'text-orange-600 font-bold' : 'text-gray-300'}`}>
+                      {a.risk.stats.sharedCustomerCount > 0 ? a.risk.stats.sharedCustomerCount : '—'}
+                    </td>
+                    <td className={`px-3 py-3 text-right text-xs ${a.risk.stats.refundRate >= 0.15 ? 'text-amber-600 font-bold' : 'text-gray-300'}`}>
+                      {a.risk.stats.refundRate > 0 ? `${(a.risk.stats.refundRate * 100).toFixed(0)}%` : '—'}
                     </td>
                     <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.instantConvPct > 0.4 ? 'text-red-600' : 'text-gray-400'}`}>
                       {a.risk.stats.instantConvPct > 0 ? `${(a.risk.stats.instantConvPct * 100).toFixed(0)}%` : '—'}
+                    </td>
+                    <td className={`px-3 py-3 text-right ${ttsTone(tts?.signupToFtsSecMedian ?? null)}`}>
+                      {tts ? fmtDuration(tts.signupToFtsSecMedian) : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="px-3 py-3 text-xs">
+                      {tts && tts.googleSimilarity !== null && tts.googleSimilarity !== undefined ? (
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 bg-gray-100 rounded-full h-1.5 overflow-hidden">
+                            <div className={`h-full ${similarityTone(tts.googleSimilarity)}`} style={{ width: `${Math.round(tts.googleSimilarity * 100)}%` }} />
+                          </div>
+                          <span className="text-gray-500 tabular-nums text-[10px]">{Math.round(tts.googleSimilarity * 100)}%</span>
+                        </div>
+                      ) : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-3 py-3 text-right font-medium text-amber-600">{fmt(a.unpaidCommissionCents)}</td>
                     <td className="px-4 py-3 text-right">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${reviewBadgeColor(a.reviewStatus)}`}>{a.reviewStatus}</span>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

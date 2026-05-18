@@ -156,6 +156,7 @@ export async function GET(req: NextRequest) {
         a.status,
         a.created_at,
         COALESCE(r_stats.referrals, 0) AS referrals,
+        COALESCE(r_stats.signups, 0) AS signups,
         COALESCE(r_stats.conversions, 0) AS conversions,
         COALESCE(r_stats.referrals_today, 0) AS referrals_today,
         COALESCE(r_stats.conversions_today, 0) AS conversions_today,
@@ -172,6 +173,7 @@ export async function GET(req: NextRequest) {
         a.status,
         a.created_at,
         COALESCE(r_stats.referrals, 0) AS referrals,
+        COALESCE(r_stats.signups, 0) AS signups,
         COALESCE(r_stats.conversions, 0) AS conversions,
         COALESCE(r_stats.referrals_today, 0) AS referrals_today,
         COALESCE(r_stats.conversions_today, 0) AS conversions_today,
@@ -184,6 +186,7 @@ export async function GET(req: NextRequest) {
         SELECT
           affiliate_id,
           COUNT(*) AS referrals,
+          COUNT(CASE WHEN status IN ('lead', 'converted') THEN 1 END) AS signups,
           COUNT(CASE WHEN status = 'converted' THEN 1 END) AS conversions,
           COUNT(CASE WHEN created_at >= CURRENT_DATE THEN 1 END) AS referrals_today,
           COUNT(CASE WHEN status = 'converted' AND converted_at >= CURRENT_DATE THEN 1 END) AS conversions_today
@@ -369,6 +372,7 @@ export async function GET(req: NextRequest) {
       status: a.status,
       createdAt: a.created_at,
       referrals: Number(a.referrals),
+      signups: Number(a.signups),
       conversions: Number(a.conversions),
       referralsToday: Number(a.referrals_today),
       conversionsToday: Number(a.conversions_today),
