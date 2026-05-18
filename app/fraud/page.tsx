@@ -503,7 +503,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: 'da
 }
 
 type FilterKey = 'all' | 'high' | 'medium' | 'unreviewed' | 'flagged' | 'tagged' | 'brand_bidding';
-type SortKey = 'unpaid' | 'risk' | 'clicks' | 'signups' | 'convRate' | 'suFtsRate' | 'instant' | 'signupToFts' | 'googleSim';
+type SortKey = 'unpaid' | 'risk' | 'clicks' | 'pageviews' | 'signups' | 'phFts' | 'conversions' | 'suFtsRate' | 'instant' | 'signupToFts' | 'googleSim';
 
 // Colour for SU→FTS rate: red if within 0.5x of Google brand baseline (likely
 // brand-bidding fingerprint), amber if 0.5-2x, gray if much lower/higher.
@@ -547,6 +547,7 @@ interface TtsPerAffiliate {
   googleSimilarity: number | null | undefined;
   fts: number;
   signups?: number;
+  pageviews?: number | null;
   signupToFtsRate?: number | null;
   countries?: { code: string; name: string; count: number }[];
 }
@@ -593,7 +594,7 @@ export default function FraudPage() {
       const ttsP = fetch('/api/affiliates/tts?from=2026-04-01&to=2026-06-01').then(r => r.json()).catch(() => null);
       const json = await fraudP;
       setData(json);
-      ttsP.then((tts: { overall?: TtsOverall; affiliates?: { affiliateId?: string; signupToFtsSecMedian: number | null; googleSimilarity?: number | null; fts: number; signups?: number; signupToFtsRate?: number | null; countries?: { code: string; name: string; count: number }[] }[] }) => {
+      ttsP.then((tts: { overall?: TtsOverall; affiliates?: { affiliateId?: string; signupToFtsSecMedian: number | null; googleSimilarity?: number | null; fts: number; signups?: number; pageviews?: number | null; signupToFtsRate?: number | null; countries?: { code: string; name: string; count: number }[] }[] }) => {
         if (tts?.overall) setTtsOverall(tts.overall);
         if (!tts?.affiliates) return;
         const m = new Map<string, TtsPerAffiliate>();
@@ -603,6 +604,7 @@ export default function FraudPage() {
             googleSimilarity: r.googleSimilarity,
             fts: r.fts,
             signups: r.signups,
+            pageviews: r.pageviews,
             signupToFtsRate: r.signupToFtsRate,
             countries: r.countries,
           });
@@ -638,15 +640,17 @@ export default function FraudPage() {
     const sortVal = (a: FraudAffiliate): number => {
       const tts = ttsByAffId.get(a.id);
       switch (sortKey) {
-        case 'unpaid':     return a.unpaidCommissionCents;
-        case 'risk':       return a.risk.score;
-        case 'clicks':     return a.referrals;
-        case 'signups':    return tts?.signups ?? -1;
-        case 'convRate':   return a.risk.stats.convRate;
-        case 'suFtsRate':  return tts?.signupToFtsRate ?? -1;
-        case 'instant':    return a.risk.stats.instantConvPct;
+        case 'unpaid':      return a.unpaidCommissionCents;
+        case 'risk':        return a.risk.score;
+        case 'clicks':      return a.referrals;
+        case 'pageviews':   return tts?.pageviews ?? -1;
+        case 'signups':     return tts?.signups ?? -1;
+        case 'phFts':       return tts?.fts ?? -1;
+        case 'conversions': return a.conversions;
+        case 'suFtsRate':   return tts?.signupToFtsRate ?? -1;
+        case 'instant':     return a.risk.stats.instantConvPct;
         case 'signupToFts': return tts?.signupToFtsSecMedian ?? Number.POSITIVE_INFINITY;
-        case 'googleSim':  return tts?.googleSimilarity ?? -1;
+        case 'googleSim':   return tts?.googleSimilarity ?? -1;
       }
     };
     const dir = sortDir === 'asc' ? 1 : -1;
@@ -791,12 +795,14 @@ export default function FraudPage() {
                   <th className="text-left px-4 py-3 font-medium">Affiliate</th>
                   <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="risk" label="Risk" align="right" title="0-100 weighted risk score" />
                   <th title="Top 3 fraud signals that fired" className="text-left px-3 py-3 font-medium">Top signals</th>
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="clicks" label="Clicks" align="right" title="Total referrals (?via=token clicks)" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="signups" label="Signups" align="right" title="REAL signup count from PostHog (people who created a Runable account via this affiliate's link)" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="convRate" label="Click→Pay" align="right" title="Paid / Clicks. >40% is suspicious." />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="suFtsRate" label="SU→FTS" align="right" title="Paid / Signups. Compare to Google brand baseline — affiliates matching it are likely brand-bidding (intercepting buyer-intent traffic)." />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="instant" label="Instant %" align="right" title="% of conversions in <5 min" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="signupToFts" label="Median sign-up to pay" align="right" title="Median sign_up → first paid (PostHog)" />
+                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="clicks" label="Clicks" align="right" title="Total ?via=token clicks (Rewardful all-time)" />
+                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="pageviews" label="Pageviews (PostHog)" align="right" title="Distinct users with $pageview on a ?via=token URL (PostHog, in window)" />
+                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="signups" label="Signups (PostHog)" align="right" title="REAL signup count from PostHog (in window)" />
+                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="phFts" label="FTS (PostHog)" align="right" title="First-time-paid customers matched to this affiliate via customer_email (in window)" />
+                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="conversions" label="Conversions (Rewardful)" align="right" title="Rewardful 'converted' state count — all-time" />
+                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="instant" label="Instant %" align="right" title="% of conversions where click→paid was <5 min" />
+                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="signupToFts" label="Median Sign-up to FTS time" align="right" title="Median sign_up → first paid (PostHog, in window)" />
+                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="suFtsRate" label="Signup to FTS" align="right" title="FTS / Signups (PostHog). Compare to Google brand baseline — affiliates matching it are likely brand-bidding." />
                   <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="googleSim" label="vs Google" align="left" title="Similarity to Google brand-search baseline" />
                   <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="unpaid" label="Unpaid" align="right" title="Unpaid commission balance" />
                   <th title="Manual review state" className="text-right px-4 py-3 font-medium">Review</th>
@@ -840,21 +846,25 @@ export default function FraudPage() {
                         {a.risk.signals.length === 0 && <span className="text-xs text-gray-300">—</span>}
                       </div>
                     </td>
-                    <td className="px-3 py-3 text-right text-gray-700">{a.referrals}</td>
+                    <td className="px-3 py-3 text-right text-gray-700">{a.referrals.toLocaleString()}</td>
+                    <td className="px-3 py-3 text-right text-gray-700">
+                      {tts && tts.pageviews != null ? tts.pageviews.toLocaleString() : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-3 py-3 text-right font-medium text-gray-700">
                       {tts && tts.signups != null ? tts.signups.toLocaleString() : <span className="text-gray-300">—</span>}
                     </td>
-                    <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.convRate > 0.4 ? 'text-red-600' : 'text-gray-700'}`}>
-                      {(a.risk.stats.convRate * 100).toFixed(0)}%
+                    <td className="px-3 py-3 text-right text-gray-700">
+                      {tts ? tts.fts.toLocaleString() : <span className="text-gray-300">—</span>}
                     </td>
-                    <td className={`px-3 py-3 text-right font-medium ${suFtsTone(tts?.signupToFtsRate, ttsOverall?.googleSuToFtsRate)}`}>
-                      {tts && tts.signupToFtsRate != null ? `${(tts.signupToFtsRate * 100).toFixed(1)}%` : <span className="text-gray-300">—</span>}
-                    </td>
+                    <td className="px-3 py-3 text-right font-medium text-gray-900">{a.conversions.toLocaleString()}</td>
                     <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.instantConvPct > 0.4 ? 'text-red-600' : 'text-gray-400'}`}>
                       {a.risk.stats.instantConvPct > 0 ? `${(a.risk.stats.instantConvPct * 100).toFixed(0)}%` : '—'}
                     </td>
                     <td className={`px-3 py-3 text-right ${ttsTone(tts?.signupToFtsSecMedian ?? null)}`}>
                       {tts ? fmtDuration(tts.signupToFtsSecMedian) : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className={`px-3 py-3 text-right font-medium ${suFtsTone(tts?.signupToFtsRate, ttsOverall?.googleSuToFtsRate)}`}>
+                      {tts && tts.signupToFtsRate != null ? `${(tts.signupToFtsRate * 100).toFixed(1)}%` : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-3 py-3 text-xs">
                       {tts && tts.googleSimilarity !== null && tts.googleSimilarity !== undefined ? (

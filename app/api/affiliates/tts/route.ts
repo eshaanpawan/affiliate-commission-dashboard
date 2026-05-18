@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/db';
-import { getFunnelTimingsForFTS, getFunnelCountsBySource, getSignupsByViaToken, FunnelTiming } from '@/lib/posthog';
+import { getFunnelTimingsForFTS, getFunnelCountsBySource, getSignupsByViaToken, getPageviewsByViaToken, FunnelTiming } from '@/lib/posthog';
 
 // PostHog HogQL queries can take 15-30s for a 2-month window — beyond the
 // default 10s Vercel limit. Set explicit 60s ceiling.
@@ -91,11 +91,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(cached.data);
   }
 
-  // 1. Pull FTS-window funnel timings + group counts + per-token signups in parallel
-  const [timings, sourceCounts, signupsByToken] = await Promise.all([
+  // 1. Pull FTS-window funnel timings + group counts + per-token signups + pageviews in parallel
+  const [timings, sourceCounts, signupsByToken, pageviewsByToken] = await Promise.all([
     getFunnelTimingsForFTS(from, to),
     getFunnelCountsBySource(from, to),
     getSignupsByViaToken(from, to),
+    getPageviewsByViaToken(from, to),
   ]);
 
   if (timings.length === 0) {
@@ -216,8 +217,9 @@ export async function GET(req: NextRequest) {
     }
     const countries = [...countryCounts.values()].sort((a, b) => b.count - a.count);
 
-    // PostHog signups for this affiliate's primary token (REAL signup count)
+    // PostHog signups + pageviews for this affiliate's primary token
     const phSignups = aff.primary_link_token ? (signupsByToken.get(aff.primary_link_token) ?? 0) : 0;
+    const phPageviews = aff.primary_link_token ? (pageviewsByToken.get(aff.primary_link_token) ?? 0) : 0;
     const suToFtsRate = phSignups > 0 ? list.length / phSignups : null;
 
     affiliateRows.push({
@@ -226,7 +228,7 @@ export async function GET(req: NextRequest) {
       affiliateId: affId,
       email: aff.email,
       linkToken: aff.primary_link_token,
-      pageviews: null,
+      pageviews: phPageviews,
       signups: phSignups,
       fts: list.length,
       pvToSignupRate: null,

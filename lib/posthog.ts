@@ -128,6 +128,37 @@ export interface FunnelCounts {
   signupToFtsSec: number | null; // overall median in this group
 }
 
+// Returns a Map<via_token, pageview_count> — how many distinct people had a
+// $pageview event on a URL containing ?via=<token> in the window. Counts each
+// distinct person once (not raw pageview events).
+export async function getPageviewsByViaToken(
+  from: Date,
+  to: Date
+): Promise<Map<string, number>> {
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
+  const query = `
+    SELECT
+      extract(properties.$current_url, 'via=([a-zA-Z0-9_-]+)') AS via_token,
+      COUNT(DISTINCT person_id) AS pageviews
+    FROM events
+    WHERE event = '$pageview'
+      AND timestamp >= toDateTime('${fromIso}')
+      AND timestamp < toDateTime('${toIso}')
+      AND properties.$current_url ILIKE '%via=%'
+    GROUP BY via_token
+  `;
+  const data = await runHogQL(query);
+  const out = new Map<string, number>();
+  if (!data || data.error) return out;
+  for (const row of data.results) {
+    const [token, count] = row as [string, number];
+    if (!token) continue;
+    out.set(token, Number(count));
+  }
+  return out;
+}
+
 // Returns a Map<via_token, signup_count> — how many distinct people signed up
 // after first landing on a URL containing ?via=<token>. The token is extracted
 // from person.$initial_current_url. Used to get the REAL signup count per
