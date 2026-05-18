@@ -303,7 +303,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-gray-50">
       {selectedAffiliate && <AffiliateModal affiliate={selectedAffiliate} onClose={() => setSelectedAffiliate(null)} />}
-      <div className="max-w-7xl mx-auto px-4 py-8">
+      <div className="max-w-[112rem] mx-auto px-4 py-8">
 
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
@@ -647,7 +647,7 @@ export default function Dashboard() {
             <div className="p-8 text-center text-gray-400 text-sm">No affiliates yet.</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="min-w-[1500px] w-full text-sm">
                 <thead>
                   <tr className="text-xs text-gray-500 border-b border-gray-100">
                     <th className="text-left px-5 py-3 font-medium">Affiliate</th>

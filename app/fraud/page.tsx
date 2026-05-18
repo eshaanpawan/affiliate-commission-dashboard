@@ -535,7 +535,7 @@ export default function FraudPage() {
     <div className="min-h-screen bg-gray-50">
       {selected && <FraudModal affiliate={selected} onClose={() => setSelected(null)} onReviewUpdate={updateAffiliate} />}
 
-      <div className="max-w-7xl mx-auto px-4 py-8">
+      <div className="max-w-[112rem] mx-auto px-4 py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -631,8 +631,8 @@ export default function FraudPage() {
         ) : !data || filtered.length === 0 ? (
           <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400 text-sm">No affiliates match the current filter.</div>
         ) : (
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="bg-white border border-gray-200 rounded-xl overflow-x-auto">
+            <table className="min-w-[1400px] w-full text-sm">
               <thead>
                 <tr className="text-xs text-gray-500 border-b border-gray-100">
                   <th className="text-left px-4 py-3 font-medium">Affiliate</th>

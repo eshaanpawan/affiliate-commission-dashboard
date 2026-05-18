@@ -116,30 +116,33 @@ export async function GET(req: NextRequest) {
   `) as unknown as AffiliateRow[];
   const affMap = new Map(affRows.map(a => [a.rewardful_id, a]));
 
-  // 3. Classify and bucket
+  // 3. Classify and bucket.
+  // Two top-level buckets: 'google' (brand-search baseline) and 'rest' (everything else,
+  // including affiliate-attributed traffic). Per-affiliate rows are also collected for
+  // the per-affiliate comparison.
   const googleTimings: FunnelTiming[] = [];
-  const otherTimings: FunnelTiming[] = [];
-  const affiliateTimings: FunnelTiming[] = [];
+  const restTimings: FunnelTiming[] = [];
   const byAffiliate = new Map<string, FunnelTiming[]>();
 
   for (const t of timings) {
     const affId = emailToAffiliateId.get(t.email.toLowerCase());
     if (affId) {
-      affiliateTimings.push(t);
       const list = byAffiliate.get(affId) ?? [];
       list.push(t);
       byAffiliate.set(affId, list);
-    } else if (isGoogleSource(t)) {
+    }
+    // Classify by source, NOT by affiliate-attribution — affiliate users still count
+    // as Google if their initial source was Google.
+    if (isGoogleSource(t)) {
       googleTimings.push(t);
     } else {
-      otherTimings.push(t);
+      restTimings.push(t);
     }
   }
 
   // 4. Build baseline rows
   const googleSignupToFts = median(googleTimings.map(t => t.signupToFtsSec).filter((x): x is number => x !== null));
-  const otherSignupToFts = median(otherTimings.map(t => t.signupToFtsSec).filter((x): x is number => x !== null));
-  const affSignupToFts = median(affiliateTimings.map(t => t.signupToFtsSec).filter((x): x is number => x !== null));
+  const restSignupToFts = median(restTimings.map(t => t.signupToFtsSec).filter((x): x is number => x !== null));
 
   const googleRow: FunnelRow = {
     label: '🎯 Google (brand-search baseline)',
@@ -151,25 +154,15 @@ export async function GET(req: NextRequest) {
     signupToFtsRate: rateOrNull(sourceCounts.google.fts, sourceCounts.google.signups),
     signupToFtsSecMedian: googleSignupToFts ?? sourceCounts.google.signupToFtsSec,
   };
-  const otherRow: FunnelRow = {
-    label: 'Direct / other (control)',
+  const restRow: FunnelRow = {
+    label: 'Rest (everything minus Google)',
     source: 'other',
     pageviews: sourceCounts.other.pageviews,
     signups: sourceCounts.other.signups,
     fts: sourceCounts.other.fts,
     pvToSignupRate: rateOrNull(sourceCounts.other.signups, sourceCounts.other.pageviews),
     signupToFtsRate: rateOrNull(sourceCounts.other.fts, sourceCounts.other.signups),
-    signupToFtsSecMedian: otherSignupToFts ?? sourceCounts.other.signupToFtsSec,
-  };
-  const affRow: FunnelRow = {
-    label: 'All affiliates combined',
-    source: 'affiliate',
-    pageviews: null, // we don't have a clean affiliate-attributed pageview count from PostHog
-    signups: affiliateTimings.filter(t => t.signupAt !== null).length,
-    fts: affiliateTimings.length,
-    pvToSignupRate: null,
-    signupToFtsRate: null,
-    signupToFtsSecMedian: affSignupToFts,
+    signupToFtsSecMedian: restSignupToFts ?? sourceCounts.other.signupToFtsSec,
   };
 
   // 5. Per-affiliate rows
@@ -182,12 +175,12 @@ export async function GET(req: NextRequest) {
 
     // Similarity to Google baseline: log-distance comparison
     let similarity: number | null = null;
-    if (googleSignupToFts !== null && otherSignupToFts !== null && med !== null && list.length >= 2 && googleSignupToFts !== otherSignupToFts) {
+    if (googleSignupToFts !== null && restSignupToFts !== null && med !== null && list.length >= 2 && googleSignupToFts !== restSignupToFts) {
       const ln = (x: number) => Math.log(Math.max(60, x));
       const dG = Math.abs(ln(med) - ln(googleSignupToFts));
-      const dO = Math.abs(ln(med) - ln(otherSignupToFts));
-      const total = dG + dO;
-      similarity = total === 0 ? 0.5 : dO / total;
+      const dR = Math.abs(ln(med) - ln(restSignupToFts));
+      const total = dG + dR;
+      similarity = total === 0 ? 0.5 : dR / total;
     }
 
     affiliateRows.push({
@@ -217,7 +210,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     window: { from: from.toISOString(), to: to.toISOString() },
     totalFts: timings.length,
-    baselines: [googleRow, otherRow, affRow],
+    baselines: [googleRow, restRow],
     affiliates: affiliateRows,
   });
 }
