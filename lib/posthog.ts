@@ -164,8 +164,8 @@ export async function getFunnelCountsBySource(
       COUNT(DISTINCT CASE WHEN had_pv THEN distinct_id ELSE NULL END) AS pv_users,
       COUNT(DISTINCT CASE WHEN had_signup THEN distinct_id ELSE NULL END) AS signup_users,
       COUNT(DISTINCT CASE WHEN had_fts THEN distinct_id ELSE NULL END) AS fts_users,
-      MEDIAN(CASE WHEN had_fts AND signup_at IS NOT NULL AND fts_at IS NOT NULL
-                  THEN dateDiff('second', signup_at, fts_at) ELSE NULL END) AS sf_median_sec
+      quantile(0.5)(CASE WHEN had_fts AND signup_at IS NOT NULL AND fts_at IS NOT NULL
+                        THEN dateDiff('second', signup_at, fts_at) ELSE NULL END) AS sf_median_sec
     FROM user_funnel
     GROUP BY source
   `;
