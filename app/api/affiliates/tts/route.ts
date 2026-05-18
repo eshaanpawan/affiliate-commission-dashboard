@@ -65,10 +65,14 @@ interface AffiliateRow {
   primary_link_token: string | null;
 }
 
-function isGoogleSource(t: FunnelTiming): boolean {
-  const utm = (t.initialUtmSource ?? '').toLowerCase();
-  const ref = (t.initialReferrer ?? '').toLowerCase();
-  return utm.includes('google') || ref.includes('google');
+// Strict "Google brand-search Ad" classifier — matches Runable's SER_BRAND campaign
+// (campaign_id 23280363543). Both old (`googleads`) and new (`google_ads`) utm_source
+// tags are accepted. utm_campaign must be exactly 'brand'.
+function isGoogleBrandSearch(t: FunnelTiming): boolean {
+  const src = (t.initialUtmSource ?? '').toLowerCase();
+  const campaign = (t.initialUtmCampaign ?? '').toLowerCase();
+  if (campaign !== 'brand') return false;
+  return src === 'googleads' || src === 'google_ads';
 }
 
 function rateOrNull(n: number, d: number | null): number | null {
@@ -151,7 +155,7 @@ export async function GET(req: NextRequest) {
     }
     // Classify by source, NOT by affiliate-attribution — affiliate users still count
     // as Google if their initial source was Google.
-    if (isGoogleSource(t)) {
+    if (isGoogleBrandSearch(t)) {
       googleTimings.push(t);
     } else {
       restTimings.push(t);

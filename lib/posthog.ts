@@ -25,13 +25,14 @@ export interface FunnelTiming {
   firstPvAt: string | null;        // earliest $pageview for this user
   signupAt: string | null;
   ftsAt: string;
-  initialUtmSource: string | null; // person property $initial_utm_source
-  initialReferrer: string | null;  // person property $initial_referring_domain
-  countryCode: string | null;      // $geoip_country_code from $pageview
-  countryName: string | null;      // $geoip_country_name from $pageview
-  pvToSignupSec: number | null;    // signup - first_pv
-  signupToFtsSec: number | null;   // fts - signup
-  pvToFtsSec: number | null;       // fts - first_pv (full funnel)
+  initialUtmSource: string | null;   // person property $initial_utm_source
+  initialUtmCampaign: string | null; // person property $initial_utm_campaign
+  initialReferrer: string | null;    // person property $initial_referring_domain
+  countryCode: string | null;
+  countryName: string | null;
+  pvToSignupSec: number | null;
+  signupToFtsSec: number | null;
+  pvToFtsSec: number | null;
 }
 
 async function runHogQL(query: string): Promise<HogQLResponse | null> {
@@ -143,6 +144,7 @@ export async function getFunnelCountsBySource(
       SELECT
         events.distinct_id AS distinct_id,
         any(person.properties.$initial_utm_source) AS initial_utm,
+        any(person.properties.$initial_utm_campaign) AS initial_campaign,
         any(person.properties.$initial_referring_domain) AS initial_ref,
         MAX(events.event = '$pageview') AS had_pv,
         MAX(events.event = 'sign_up') AS had_signup,
@@ -160,7 +162,9 @@ export async function getFunnelCountsBySource(
     )
     SELECT
       CASE
-        WHEN LOWER(COALESCE(initial_utm, '')) LIKE '%google%' OR LOWER(COALESCE(initial_ref, '')) LIKE '%google%' THEN 'google'
+        -- Strict brand-search Ad: utm_source in (googleads, google_ads) AND utm_campaign = 'brand'
+        WHEN LOWER(COALESCE(initial_utm, '')) IN ('googleads', 'google_ads')
+             AND LOWER(COALESCE(initial_campaign, '')) = 'brand' THEN 'google'
         ELSE 'other'
       END AS source,
       COUNT(DISTINCT CASE WHEN had_pv THEN distinct_id ELSE NULL END) AS pv_users,
@@ -220,6 +224,7 @@ export async function getFunnelTimingsForFTS(
          AND events.properties.scenario = 'upgrade'
         THEN events.timestamp ELSE NULL END) AS fts_at,
       any(person.properties.$initial_utm_source) AS initial_utm_source,
+      any(person.properties.$initial_utm_campaign) AS initial_utm_campaign,
       any(person.properties.$initial_referring_domain) AS initial_referring_domain
     FROM events
     WHERE events.timestamp >= toDateTime('2025-01-01')
@@ -238,8 +243,8 @@ export async function getFunnelTimingsForFTS(
 
   const out: FunnelTiming[] = [];
   for (const row of data.results) {
-    const [, email, firstPvRaw, signupRaw, ftsRaw, utmSource, refDomain] = row as
-      [string, string, string | null, string | null, string, string | null, string | null];
+    const [, email, firstPvRaw, signupRaw, ftsRaw, utmSource, utmCampaign, refDomain] = row as
+      [string, string, string | null, string | null, string, string | null, string | null, string | null];
     const countryCode: string | null = null;
     const countryName: string | null = null;
     if (!email || !ftsRaw) continue;
@@ -264,6 +269,7 @@ export async function getFunnelTimingsForFTS(
       signupAt,
       ftsAt,
       initialUtmSource: utmSource ?? null,
+      initialUtmCampaign: utmCampaign ?? null,
       initialReferrer: refDomain ?? null,
       countryCode: countryCode ?? null,
       countryName: countryName ?? null,
