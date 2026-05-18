@@ -128,6 +128,40 @@ export interface FunnelCounts {
   signupToFtsSec: number | null; // overall median in this group
 }
 
+// Returns a Map<via_token, signup_count> — how many distinct people signed up
+// after first landing on a URL containing ?via=<token>. The token is extracted
+// from person.$initial_current_url. Used to get the REAL signup count per
+// affiliate (Rewardful's lead state is essentially never populated for Runable).
+export async function getSignupsByViaToken(
+  from: Date,
+  to: Date
+): Promise<Map<string, number>> {
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
+
+  const query = `
+    SELECT
+      extract(person.properties.$initial_current_url, 'via=([a-zA-Z0-9_-]+)') AS via_token,
+      COUNT(DISTINCT person_id) AS signups
+    FROM events
+    WHERE event = 'sign_up'
+      AND timestamp >= toDateTime('${fromIso}')
+      AND timestamp < toDateTime('${toIso}')
+      AND person.properties.$initial_current_url ILIKE '%via=%'
+    GROUP BY via_token
+  `;
+
+  const data = await runHogQL(query);
+  const out = new Map<string, number>();
+  if (!data || data.error) return out;
+  for (const row of data.results) {
+    const [token, count] = row as [string, number];
+    if (!token) continue;
+    out.set(token, Number(count));
+  }
+  return out;
+}
+
 // Pageview / signup / FTS user counts per source, for ALL users active in window
 // (not just those who FTS'd). Used to compute funnel conversion rates per group.
 export async function getFunnelCountsBySource(

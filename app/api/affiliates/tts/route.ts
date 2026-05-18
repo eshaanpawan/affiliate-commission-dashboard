@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/db';
-import { getFunnelTimingsForFTS, getFunnelCountsBySource, FunnelTiming } from '@/lib/posthog';
+import { getFunnelTimingsForFTS, getFunnelCountsBySource, getSignupsByViaToken, FunnelTiming } from '@/lib/posthog';
 
 // PostHog HogQL queries can take 15-30s for a 2-month window — beyond the
 // default 10s Vercel limit. Set explicit 60s ceiling.
@@ -41,14 +41,12 @@ interface FunnelRow {
   email?: string | null;
   linkToken?: string | null;
   pageviews: number | null;        // PostHog count of users with $pageview in window
-  signups: number;                 // count of users who hit sign_up
+  signups: number;                 // PostHog sign_up count (REAL signups, not Rewardful's broken 'lead')
   fts: number;                     // count of users who hit FTS
   pvToSignupRate: number | null;   // signups / pageviews
-  signupToFtsRate: number | null;  // fts / signups
+  signupToFtsRate: number | null;  // fts / signups (the SU→FTS rate)
   signupToFtsSecMedian: number | null;
-  // Similarity to Google baseline (0..1) — higher = more like brand-search interception
   googleSimilarity?: number | null;
-  // Per-affiliate country breakdown of FTS customers
   countries?: { code: string; name: string; count: number }[];
 }
 
@@ -93,10 +91,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(cached.data);
   }
 
-  // 1. Pull FTS-window funnel timings (per user) + group counts (per source)
-  const [timings, sourceCounts] = await Promise.all([
+  // 1. Pull FTS-window funnel timings + group counts + per-token signups in parallel
+  const [timings, sourceCounts, signupsByToken] = await Promise.all([
     getFunnelTimingsForFTS(from, to),
     getFunnelCountsBySource(from, to),
+    getSignupsByViaToken(from, to),
   ]);
 
   if (timings.length === 0) {
@@ -217,6 +216,10 @@ export async function GET(req: NextRequest) {
     }
     const countries = [...countryCounts.values()].sort((a, b) => b.count - a.count);
 
+    // PostHog signups for this affiliate's primary token (REAL signup count)
+    const phSignups = aff.primary_link_token ? (signupsByToken.get(aff.primary_link_token) ?? 0) : 0;
+    const suToFtsRate = phSignups > 0 ? list.length / phSignups : null;
+
     affiliateRows.push({
       label: [aff.first_name, aff.last_name].filter(Boolean).join(' ') || aff.email || '?',
       source: 'affiliate_specific',
@@ -224,10 +227,10 @@ export async function GET(req: NextRequest) {
       email: aff.email,
       linkToken: aff.primary_link_token,
       pageviews: null,
-      signups: list.filter(t => t.signupAt !== null).length,
+      signups: phSignups,
       fts: list.length,
       pvToSignupRate: null,
-      signupToFtsRate: null,
+      signupToFtsRate: suToFtsRate,
       signupToFtsSecMedian: med,
       googleSimilarity: similarity,
       countries,
@@ -242,6 +245,11 @@ export async function GET(req: NextRequest) {
     return b.fts - a.fts;
   });
 
+  const googleSuToFtsRate = sourceCounts.google.signups > 0
+    ? sourceCounts.google.fts / sourceCounts.google.signups : null;
+  const restSuToFtsRate = sourceCounts.other.signups > 0
+    ? sourceCounts.other.fts / sourceCounts.other.signups : null;
+
   const payload = {
     window: { from: from.toISOString(), to: to.toISOString() },
     totalFts: timings.length,
@@ -251,6 +259,10 @@ export async function GET(req: NextRequest) {
       restSignupToFtsSecMedian: restSignupToFts,
       googleFts: googleTimings.length,
       restFts: restTimings.length,
+      googleSignups: sourceCounts.google.signups,
+      restSignups: sourceCounts.other.signups,
+      googleSuToFtsRate,
+      restSuToFtsRate,
     },
     baselines: [googleRow, restRow],
     affiliates: affiliateRows,

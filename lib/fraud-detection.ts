@@ -452,26 +452,11 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
       detail: `${n.toLocaleString()} referrals across ${activeDays} days (~${Math.round(n / activeDays)}/day avg) with ${(convRate * 100).toFixed(2)}% conversion. Real content affiliates rarely sustain >100 daily clicks with <1% conversion — this looks like click-farm or fake-traffic noise.`,
     });
   }
-  if (duplicateNameCount > 0) {
-    signals.push({
-      key: 'duplicate_name',
-      label: 'Duplicate-name account',
-      severity: duplicateNameCount >= 2 ? 'high' : 'medium',
-      value: `${duplicateNameCount + 1} accounts`,
-      detail: `${duplicateNameCount + 1} affiliates share the exact first+last name as this one. Multi-account ring pattern — same person creating accounts to distribute fraud below per-affiliate thresholds.`,
-    });
-  }
+  // duplicate_name signal removed — surfaced as a separate modal section instead.
+  // The dup-name *count* is still kept in stats for filtering/sorting.
   // Signup-cluster: only fire on genuinely tight gaps (<10 min). 60-min was too loose
   // for a ~1500-affiliate program where average signup interval is ~30 min organically.
-  if (signupClusterMinutes !== null && signupClusterMinutes < 10) {
-    signals.push({
-      key: 'signup_cluster',
-      label: 'Signed up adjacent to another affiliate',
-      severity: signupClusterMinutes < 2 ? 'high' : 'medium',
-      value: `${signupClusterMinutes.toFixed(1)} min`,
-      detail: `Account was created within ${signupClusterMinutes.toFixed(1)} minutes of another affiliate. Tight clustering suggests coordinated mass-signup.`,
-    });
-  }
+  // signup_cluster signal removed — high false-positive rate at 1500-affiliate scale.
 
   // Compose risk score 0-100
   let score = 0;
@@ -498,10 +483,8 @@ export function computeAffiliateRisk(input: AffiliateRiskInput): AffiliateRisk {
       && ttcStddevSec < medianTimeToConvSec * 0.3 && medianTimeToConvSec < 600) score += 15;
   if (burstConcentration >= 0.7 && n >= 10) score += Math.min(15, burstConcentration * 15);
   if (n >= 1000 && activeDays > 0 && (n / activeDays) >= 200 && convRate < 0.01) score += 20;
-  if (duplicateNameCount >= 2) score += 25;
-  else if (duplicateNameCount === 1) score += 15;
-  if (signupClusterMinutes !== null && signupClusterMinutes < 2) score += 15;
-  else if (signupClusterMinutes !== null && signupClusterMinutes < 10) score += 5;
+  // duplicate_name no longer contributes to score — info-only, surfaced in modal.
+  // signup_cluster signal removed.
 
   score = Math.max(0, Math.min(100, Math.round(score)));
 

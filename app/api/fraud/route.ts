@@ -191,7 +191,8 @@ export async function GET() {
   const customerOverlap = customerOverlapRaw as unknown as OverlapRow[];
   const nameKeys = nameKeyRaw as unknown as NameKeyRow[];
 
-  // Duplicate-name index: how many OTHER affiliates share this name_key
+  // Duplicate-name index: list of OTHER affiliates that share the same name_key.
+  // Surfaced as a "Duplicate name accounts" section in the modal — no scoring contribution.
   const nameToIds = new Map<string, string[]>();
   for (const n of nameKeys) {
     if (!n.name_key) continue;
@@ -199,30 +200,23 @@ export async function GET() {
     list.push(n.rewardful_id);
     nameToIds.set(n.name_key, list);
   }
-  const dupCountById = new Map<string, number>();
+  // Build a quick affiliate lookup so we can attach names/emails to dup entries
+  const affLookupById = new Map<string, { name: string; email: string | null }>();
+  for (const a of affiliates) {
+    const name = [a.first_name, a.last_name].filter(Boolean).join(' ') || a.email || '(no name)';
+    affLookupById.set(a.rewardful_id, { name, email: a.email });
+  }
+  const dupListById = new Map<string, { id: string; name: string; email: string | null }[]>();
   for (const n of nameKeys) {
     if (!n.name_key) continue;
-    const others = nameToIds.get(n.name_key) ?? [];
-    dupCountById.set(n.rewardful_id, Math.max(0, others.length - 1));
-  }
-
-  // Signup-time cluster: minutes to nearest other affiliate (any direction)
-  const sortedByTime = [...nameKeys].sort((a, b) =>
-    new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-  );
-  const nearestMinutesById = new Map<string, number | null>();
-  for (let i = 0; i < sortedByTime.length; i++) {
-    const me = sortedByTime[i];
-    let nearest: number | null = null;
-    if (i > 0) {
-      const dPrev = (new Date(me.created_at).getTime() - new Date(sortedByTime[i - 1].created_at).getTime()) / 60000;
-      nearest = dPrev;
-    }
-    if (i < sortedByTime.length - 1) {
-      const dNext = (new Date(sortedByTime[i + 1].created_at).getTime() - new Date(me.created_at).getTime()) / 60000;
-      if (nearest === null || dNext < nearest) nearest = dNext;
-    }
-    nearestMinutesById.set(me.rewardful_id, nearest);
+    const ids = nameToIds.get(n.name_key) ?? [];
+    const others = ids
+      .filter(id => id !== n.rewardful_id)
+      .map(id => {
+        const lookup = affLookupById.get(id);
+        return { id, name: lookup?.name ?? '(unknown)', email: lookup?.email ?? null };
+      });
+    dupListById.set(n.rewardful_id, others);
   }
 
   // Group referrals by affiliate
@@ -260,8 +254,8 @@ export async function GET() {
         shared_visitor_count: visitorOverlapMap.get(a.rewardful_id) ?? 0,
         shared_customer_count: customerOverlapMap.get(a.rewardful_id) ?? 0,
       },
-      duplicateNameCount: dupCountById.get(a.rewardful_id) ?? 0,
-      signupClusterMinutes: nearestMinutesById.get(a.rewardful_id) ?? null,
+      duplicateNameCount: dupListById.get(a.rewardful_id)?.length ?? 0,
+      signupClusterMinutes: null,
     });
     return {
       id: a.rewardful_id,
@@ -279,6 +273,8 @@ export async function GET() {
       paidCommissionCents: Number(a.paid_commission_cents),
       referrals: Number(a.total_referrals),
       conversions: Number(a.total_conversions),
+      // Other affiliates that share the exact first+last name as this one
+      duplicateNames: dupListById.get(a.rewardful_id) ?? [],
       risk,
     };
   });
