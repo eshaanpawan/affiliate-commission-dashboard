@@ -96,6 +96,7 @@ export async function GET(req: NextRequest) {
   ]);
 
   if (timings.length === 0) {
+    // Don't cache this — it's a transient failure (timeout etc).
     return NextResponse.json({
       window: { from: from.toISOString(), to: to.toISOString() },
       baselines: [],
@@ -250,6 +251,10 @@ export async function GET(req: NextRequest) {
     baselines: [googleRow, restRow],
     affiliates: affiliateRows,
   };
-  CACHE.set(cacheKey, { at: Date.now(), data: payload });
+  // Only cache non-empty responses — otherwise a transient PostHog failure
+  // poisons the cache for 5 min and every user sees blank metrics.
+  if (timings.length > 0) {
+    CACHE.set(cacheKey, { at: Date.now(), data: payload });
+  }
   return NextResponse.json(payload);
 }
