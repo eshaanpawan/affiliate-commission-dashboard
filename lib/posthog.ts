@@ -238,6 +238,47 @@ export async function getSignupsByViaToken(
   return out;
 }
 
+// Returns a Map<via_token, Array<{ code, count }>> — for each via_token, the country
+// distribution of users whose first paid subscription happened in window.
+// Country comes from person.properties.$geoip_country_code, which PostHog populates
+// from each user's first client-side $pageview (server-side events have
+// $geoip_disable=true, so we can't use event-level geo).
+export async function getCountriesByViaToken(
+  from: Date,
+  to: Date
+): Promise<Map<string, { code: string; name: string; count: number }[]>> {
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
+  const query = `
+    SELECT
+      extract(person.properties.$initial_current_url, 'via=([a-zA-Z0-9_-]+)') AS via_token,
+      person.properties.$geoip_country_code AS country_code,
+      person.properties.$geoip_country_name AS country_name,
+      COUNT(DISTINCT person_id) AS users
+    FROM events
+    WHERE event = 'subscription_updated'
+      AND properties.isUserFirstPaidPlan = true
+      AND properties.scenario = 'upgrade'
+      AND timestamp >= toDateTime('${fromIso}')
+      AND timestamp < toDateTime('${toIso}')
+      AND person.properties.$initial_current_url ILIKE '%via=%'
+    GROUP BY via_token, country_code, country_name
+    ORDER BY users DESC
+    LIMIT 10000
+  `;
+  const data = await runHogQL(query);
+  const out = new Map<string, { code: string; name: string; count: number }[]>();
+  if (!data || data.error) return out;
+  for (const row of data.results) {
+    const [token, code, name, count] = row as [string, string | null, string | null, number];
+    if (!token || !code) continue;
+    const list = out.get(token) ?? [];
+    list.push({ code, name: name ?? code, count: Number(count) });
+    out.set(token, list);
+  }
+  return out;
+}
+
 // Pageview / signup / FTS user counts per source, for ALL users active in window
 // (not just those who FTS'd). Used to compute funnel conversion rates per group.
 export async function getFunnelCountsBySource(

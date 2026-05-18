@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/db';
-import { getFunnelTimingsForFTS, getFunnelCountsBySource, getSignupsByViaToken, getPageviewsByViaToken, getFtsByViaToken, FunnelTiming } from '@/lib/posthog';
+import { getFunnelTimingsForFTS, getFunnelCountsBySource, getSignupsByViaToken, getPageviewsByViaToken, getFtsByViaToken, getCountriesByViaToken, FunnelTiming } from '@/lib/posthog';
 
 // PostHog HogQL queries can take 15-30s for a 2-month window — beyond the
 // default 10s Vercel limit. Set explicit 60s ceiling.
@@ -92,13 +92,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(cached.data);
   }
 
-  // 1. Pull FTS-window funnel timings + group counts + per-token signups + pageviews + FTS in parallel
-  const [timings, sourceCounts, signupsByToken, pageviewsByToken, ftsByToken] = await Promise.all([
+  // 1. Pull FTS-window funnel timings + group counts + per-token signups + pageviews + FTS + countries in parallel
+  const [timings, sourceCounts, signupsByToken, pageviewsByToken, ftsByToken, countriesByToken] = await Promise.all([
     getFunnelTimingsForFTS(from, to),
     getFunnelCountsBySource(from, to),
     getSignupsByViaToken(from, to),
     getPageviewsByViaToken(from, to),
     getFtsByViaToken(from, to),
+    getCountriesByViaToken(from, to),
   ]);
 
   if (timings.length === 0) {
@@ -248,15 +249,9 @@ export async function GET(req: NextRequest) {
       similarity = total === 0 ? 0.5 : dR / total;
     }
 
-    const countryCounts = new Map<string, { code: string; name: string; count: number }>();
-    for (const t of list) {
-      if (!t.countryCode) continue;
-      const key = t.countryCode;
-      const ex = countryCounts.get(key);
-      if (ex) ex.count++;
-      else countryCounts.set(key, { code: t.countryCode, name: t.countryName ?? t.countryCode, count: 1 });
-    }
-    const countries = [...countryCounts.values()].sort((a, b) => b.count - a.count);
+    // Country breakdown of FTS users for this affiliate, from PostHog person-level
+    // geo (server-side events have $geoip_disable=true so we can't use event geo).
+    const countries = tok ? (countriesByToken.get(tok) ?? []) : [];
 
     affiliateRows.push({
       label: [aff.first_name, aff.last_name].filter(Boolean).join(' ') || aff.email || '?',

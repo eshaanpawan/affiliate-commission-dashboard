@@ -80,6 +80,7 @@ interface FunnelRow {
   signupToFtsRate: number | null;
   signupToFtsSecMedian: number | null;
   googleSimilarity?: number | null;
+  countries?: { code: string; name: string; count: number }[];
 }
 
 interface TtsResponse {
@@ -98,7 +99,15 @@ interface AffiliateDetail {
 
 type SortKey = 'referrals' | 'conversions' | 'revenueCents' | 'commissionCents';
 
-function AffiliateModal({ affiliate, onClose }: { affiliate: Affiliate; onClose: () => void }) {
+const CACHE_KEY_DASH = 'affiliateDashboard:v1';
+const CACHE_KEY_TTS = 'affiliateTts:v1';
+
+function AffiliateModal({ affiliate, ftsCountries, ftsTotal, onClose }: {
+  affiliate: Affiliate;
+  ftsCountries: { code: string; name: string; count: number }[];
+  ftsTotal: number;
+  onClose: () => void;
+}) {
   const [detail, setDetail] = useState<AffiliateDetail | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -161,6 +170,41 @@ function AffiliateModal({ affiliate, onClose }: { affiliate: Affiliate; onClose:
               <DayOnDayChart title="Revenue (last 30 days)" data={detail.dailyRevenue} bars={[{ key: 'usd', color: '#6366f1', label: 'Revenue' }]} valuePrefix="$" />
               <DayOnDayChart title="Commissions (last 30 days)" data={detail.dailyCommissions} bars={[{ key: 'usd', color: '#f59e0b', label: 'Commissions' }]} valuePrefix="$" />
             </div>
+            {ftsCountries.length > 0 && (
+              <div className="bg-gray-50 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-xs font-semibold text-gray-700">Paying customers by country</p>
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      {ftsTotal} FTS · {ftsCountries.length} countries · concentration {(((ftsCountries[0]?.count ?? 0) / ftsTotal) * 100).toFixed(0)}% in top country
+                    </p>
+                  </div>
+                  <p className="text-[11px] text-gray-400">
+                    {ftsCountries.length >= 30 ? <span className="text-red-600 font-semibold">Very dispersed — global brand-search fingerprint</span>
+                      : ftsCountries.length >= 15 ? <span className="text-amber-600 font-semibold">Moderately dispersed</span>
+                      : <span className="text-emerald-600 font-semibold">Concentrated — looks like a real audience</span>}
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  {ftsCountries.slice(0, 10).map((c) => {
+                    const pctOfTotal = ftsTotal > 0 ? (c.count / ftsTotal) * 100 : 0;
+                    return (
+                      <div key={c.code} className="flex items-center gap-2 text-xs">
+                        <span className="w-28 text-gray-600 truncate">{c.name}</span>
+                        <div className="flex-1 bg-white rounded-full h-2 overflow-hidden">
+                          <div className="h-full bg-indigo-500" style={{ width: `${pctOfTotal}%` }} />
+                        </div>
+                        <span className="w-12 text-right tabular-nums text-gray-700 font-medium">{c.count}</span>
+                        <span className="w-12 text-right tabular-nums text-gray-400 text-[10px]">{pctOfTotal.toFixed(1)}%</span>
+                      </div>
+                    );
+                  })}
+                  {ftsCountries.length > 10 && (
+                    <p className="text-[11px] text-gray-400 pt-1">…and {ftsCountries.length - 10} more countries</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -180,6 +224,20 @@ function InfoTooltip({ text }: { text: string }) {
       </div>
     </div>
   );
+}
+
+function RelativeTime({ at }: { at: Date }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
+  const sec = Math.max(0, Math.floor((Date.now() - at.getTime()) / 1000));
+  const label = sec < 60 ? 'just now'
+    : sec < 3600 ? `${Math.floor(sec / 60)}m ago`
+    : sec < 86400 ? `${Math.floor(sec / 3600)}h ago`
+    : `${Math.floor(sec / 86400)}d ago`;
+  return <span title={at.toLocaleString()}>{label}</span>;
 }
 
 export default function Dashboard() {
@@ -222,16 +280,22 @@ export default function Dashboard() {
     try {
       // Fire dashboard + TTS in parallel; show dashboard immediately, fill TTS columns when it lands.
       const dashPromise = fetch(`/api/dashboard?period=${p ?? period}`).then(r => r.json());
-      const ttsPromise = (ttsData
-        ? Promise.resolve(ttsData)
-        : fetch(`/api/affiliates/tts?from=${ttsFrom}&to=${ttsTo}`).then(r => r.json()).catch(() => null));
+      const ttsPromise = fetch(`/api/affiliates/tts?from=${ttsFrom}&to=${ttsTo}`)
+        .then(r => r.json()).catch(() => null);
 
       const json = await dashPromise;
       setData(json);
-      setLastUpdated(new Date());
+      const now = new Date();
+      setLastUpdated(now);
+      try { localStorage.setItem(CACHE_KEY_DASH, JSON.stringify({ at: now.toISOString(), period: p ?? period, data: json })); } catch {}
 
       // Background: resolve TTS and merge
-      ttsPromise.then(tts => { if (tts) setTtsData(tts); }).catch(() => {});
+      ttsPromise.then(tts => {
+        if (tts && tts.affiliates) {
+          setTtsData(tts);
+          try { localStorage.setItem(CACHE_KEY_TTS, JSON.stringify({ at: new Date().toISOString(), data: tts })); } catch {}
+        }
+      }).catch(() => {});
     } catch (e) {
       console.error(e);
     } finally {
@@ -241,13 +305,14 @@ export default function Dashboard() {
 
   // Per-affiliate TTS lookup, used to fill the "Signup→Pay" and "vs Google" columns inline.
   const ttsByAffiliateId = useMemo(() => {
-    const m = new Map<string, { signupToFtsSecMedian: number | null; googleSimilarity: number | null | undefined; fts: number }>();
+    const m = new Map<string, { signupToFtsSecMedian: number | null; googleSimilarity: number | null | undefined; fts: number; countries: { code: string; name: string; count: number }[] }>();
     if (!ttsData?.affiliates) return m;
     for (const r of ttsData.affiliates) {
       if (r.affiliateId) m.set(r.affiliateId, {
         signupToFtsSecMedian: r.signupToFtsSecMedian,
         googleSimilarity: r.googleSimilarity,
         fts: r.fts,
+        countries: r.countries ?? [],
       });
     }
     return m;
@@ -268,13 +333,37 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    load();                          // show DB data immediately
-    sync();                          // sync with Rewardful in background
-    const dashInterval = setInterval(load, 30000);
-    const syncInterval = setInterval(sync, 3 * 60 * 1000);
-    return () => { clearInterval(dashInterval); clearInterval(syncInterval); };
+    // Hydrate from localStorage first so reloads are instant — no auto-polling.
+    // User must click "Refresh" to fetch fresh data.
+    let hadCachedDash = false;
+    try {
+      const cachedDash = localStorage.getItem(CACHE_KEY_DASH);
+      if (cachedDash) {
+        const { at, data: d, period: cachedPeriod } = JSON.parse(cachedDash);
+        if (d) {
+          setData(d);
+          setLastUpdated(new Date(at));
+          if (cachedPeriod) setPeriod(cachedPeriod);
+          setLoading(false);
+          hadCachedDash = true;
+        }
+      }
+      const cachedTts = localStorage.getItem(CACHE_KEY_TTS);
+      if (cachedTts) {
+        const { data: t } = JSON.parse(cachedTts);
+        if (t && t.affiliates) setTtsData(t);
+      }
+    } catch { /* localStorage unavailable, fall through to fetch */ }
+
+    // If we have nothing cached, do a one-time initial load.
+    if (!hadCachedDash) load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function refresh() {
+    setLoading(true);
+    await load(period);
+  }
 
   if (loading) {
     return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><p className="text-gray-400">Loading dashboard...</p></div>;
@@ -302,7 +391,17 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {selectedAffiliate && <AffiliateModal affiliate={selectedAffiliate} onClose={() => setSelectedAffiliate(null)} />}
+      {selectedAffiliate && (() => {
+        const tts = ttsByAffiliateId.get(selectedAffiliate.id);
+        return (
+          <AffiliateModal
+            affiliate={selectedAffiliate}
+            ftsCountries={tts?.countries ?? []}
+            ftsTotal={tts?.fts ?? 0}
+            onClose={() => setSelectedAffiliate(null)}
+          />
+        );
+      })()}
       <div className="max-w-[112rem] mx-auto px-4 py-8">
 
         {/* Header */}
@@ -316,15 +415,29 @@ export default function Dashboard() {
               🚩 Fraud audit
             </Link>
             <div className="text-right">
-            <p className="text-xs text-gray-400">{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()} · auto-refreshes every 30s` : ''}</p>
-            <p className="text-xs mt-0.5">
-              {syncing ? <span className="text-indigo-400 animate-pulse">Syncing with Rewardful...</span>
-                : lastSynced ? <span className="text-green-500">Last synced {lastSynced.toLocaleTimeString()} · syncs every 3 min</span>
-                : null}
-            </p>
-            <button onClick={sync} disabled={syncing} className="text-xs text-indigo-500 hover:text-indigo-700 mt-0.5 disabled:opacity-40">
-              {syncing ? 'Syncing...' : 'Sync now'}
-            </button>
+              <p className="text-xs text-gray-400">
+                {lastUpdated ? <>Last refreshed <RelativeTime at={lastUpdated} /> · cached locally</> : 'Never refreshed'}
+              </p>
+              <div className="flex items-center justify-end gap-2 mt-1">
+                <button
+                  onClick={refresh}
+                  disabled={loading}
+                  className="text-xs px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {loading ? 'Refreshing…' : '↻ Refresh'}
+                </button>
+                <button
+                  onClick={sync}
+                  disabled={syncing}
+                  className="text-xs px-3 py-1 rounded bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+                  title="Pull latest data from Rewardful into the DB. Run before Refresh if you want the freshest source data."
+                >
+                  {syncing ? 'Syncing…' : 'Sync from Rewardful'}
+                </button>
+              </div>
+              {lastSynced && (
+                <p className="text-[11px] text-gray-400 mt-1">Synced {lastSynced.toLocaleTimeString()}</p>
+              )}
             </div>
           </div>
         </div>
