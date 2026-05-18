@@ -139,6 +139,9 @@ export async function getPageviewsByViaToken(
 ): Promise<Map<string, number>> {
   const fromIso = from.toISOString();
   const toIso = to.toISOString();
+  // LIMIT 10000 is critical — PostHog silently caps GROUP BY results at 100
+  // rows by default, which would drop high-volume affiliates that have many
+  // unique tokens crowding the result set.
   const query = `
     SELECT
       extract(person.properties.$initial_current_url, 'via=([a-zA-Z0-9_-]+)') AS via_token,
@@ -149,6 +152,8 @@ export async function getPageviewsByViaToken(
       AND timestamp < toDateTime('${toIso}')
       AND person.properties.$initial_current_url ILIKE '%via=%'
     GROUP BY via_token
+    ORDER BY pageviews DESC
+    LIMIT 10000
   `;
   const data = await runHogQL(query);
   const out = new Map<string, number>();
@@ -183,6 +188,8 @@ export async function getFtsByViaToken(
       AND timestamp < toDateTime('${toIso}')
       AND person.properties.$initial_current_url ILIKE '%via=%'
     GROUP BY via_token
+    ORDER BY fts_count DESC
+    LIMIT 10000
   `;
   const data = await runHogQL(query);
   const out = new Map<string, number>();
@@ -216,6 +223,8 @@ export async function getSignupsByViaToken(
       AND timestamp < toDateTime('${toIso}')
       AND person.properties.$initial_current_url ILIKE '%via=%'
     GROUP BY via_token
+    ORDER BY signups DESC
+    LIMIT 10000
   `;
 
   const data = await runHogQL(query);
