@@ -172,19 +172,10 @@ function AffiliateModal({ affiliate, ftsCountries, ftsTotal, onClose }: {
             </div>
             {ftsCountries.length > 0 && (
               <div className="bg-gray-50 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <p className="text-xs font-semibold text-gray-700">Paying customers by country</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">
-                      {ftsTotal} FTS · {ftsCountries.length} countries · concentration {(((ftsCountries[0]?.count ?? 0) / ftsTotal) * 100).toFixed(0)}% in top country
-                    </p>
-                  </div>
-                  <p className="text-[11px] text-gray-400">
-                    {ftsCountries.length >= 30 ? <span className="text-red-600 font-semibold">Very dispersed — global brand-search fingerprint</span>
-                      : ftsCountries.length >= 15 ? <span className="text-amber-600 font-semibold">Moderately dispersed</span>
-                      : <span className="text-emerald-600 font-semibold">Concentrated — looks like a real audience</span>}
-                  </p>
-                </div>
+                <p className="text-xs font-semibold text-gray-700">Paying customers by country</p>
+                <p className="text-[11px] text-gray-400 mt-0.5 mb-3">
+                  {ftsTotal} FTS · {ftsCountries.length} {ftsCountries.length === 1 ? 'country' : 'countries'}
+                </p>
                 <div className="space-y-1.5">
                   {ftsCountries.slice(0, 10).map((c) => {
                     const pctOfTotal = ftsTotal > 0 ? (c.count / ftsTotal) * 100 : 0;
