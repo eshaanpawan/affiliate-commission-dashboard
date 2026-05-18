@@ -462,7 +462,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: 'da
 }
 
 type FilterKey = 'all' | 'high' | 'medium' | 'unreviewed' | 'flagged' | 'tagged' | 'brand_bidding';
-type SortKey = 'unpaid' | 'risk' | 'clicks' | 'convRate' | 'selfRef' | 'sharedCust' | 'refundRate' | 'instant' | 'signupToFts' | 'googleSim';
+type SortKey = 'unpaid' | 'risk' | 'clicks' | 'convRate' | 'instant' | 'signupToFts' | 'googleSim';
 type SortDir = 'asc' | 'desc';
 
 function SortableTh({ sortKey, sortDir, onSort, k, label, align, title }: {
@@ -481,22 +481,27 @@ function SortableTh({ sortKey, sortDir, onSort, k, label, align, title }: {
 }
 
 const SORTABLE_HEADERS: { key: SortKey; label: string; defaultDir: SortDir; title?: string }[] = [
-  { key: 'risk', label: 'Risk', defaultDir: 'desc', title: '0-100 weighted risk score' },
-  { key: 'clicks', label: 'Clicks', defaultDir: 'desc', title: 'Total referrals (?via=token clicks)' },
-  { key: 'convRate', label: 'Click→Pay', defaultDir: 'desc', title: 'Paid / Clicks. >40% is suspicious.' },
-  { key: 'selfRef', label: 'Self-ref', defaultDir: 'desc', title: 'Customer email matches affiliate email' },
-  { key: 'sharedCust', label: 'Shared cust', defaultDir: 'desc', title: 'Customer emails seen under multiple affiliates' },
-  { key: 'refundRate', label: 'Refund %', defaultDir: 'desc', title: '% of commissions voided/refunded/deleted' },
-  { key: 'instant', label: 'Instant %', defaultDir: 'desc', title: '% of conversions in <5 min' },
-  { key: 'signupToFts', label: 'Signup→Pay', defaultDir: 'asc', title: 'Median sign_up → first paid (PostHog)' },
-  { key: 'googleSim', label: 'vs Google', defaultDir: 'desc', title: 'Similarity of Signup→Pay to Google brand baseline' },
-  { key: 'unpaid', label: 'Unpaid', defaultDir: 'desc', title: 'Unpaid commission balance — money at risk' },
+  { key: 'risk', label: 'Risk', defaultDir: 'desc' },
+  { key: 'clicks', label: 'Clicks', defaultDir: 'desc' },
+  { key: 'convRate', label: 'Click→Pay', defaultDir: 'desc' },
+  { key: 'instant', label: 'Instant %', defaultDir: 'desc' },
+  { key: 'signupToFts', label: 'Median sign-up to pay', defaultDir: 'asc' },
+  { key: 'googleSim', label: 'vs Google', defaultDir: 'desc' },
+  { key: 'unpaid', label: 'Unpaid', defaultDir: 'desc' },
 ];
 
 interface TtsPerAffiliate {
   signupToFtsSecMedian: number | null;
   googleSimilarity: number | null | undefined;
   fts: number;
+}
+
+interface TtsOverall {
+  signupToFtsSecMedian: number | null;
+  googleSignupToFtsSecMedian: number | null;
+  restSignupToFtsSecMedian: number | null;
+  googleFts: number;
+  restFts: number;
 }
 
 export default function FraudPage() {
@@ -506,6 +511,7 @@ export default function FraudPage() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<FraudAffiliate | null>(null);
   const [ttsByAffId, setTtsByAffId] = useState<Map<string, TtsPerAffiliate>>(new Map());
+  const [ttsOverall, setTtsOverall] = useState<TtsOverall | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('unpaid');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [hideZeroUnpaid, setHideZeroUnpaid] = useState(true);
@@ -528,7 +534,8 @@ export default function FraudPage() {
       const ttsP = fetch('/api/affiliates/tts?from=2026-04-01&to=2026-06-01').then(r => r.json()).catch(() => null);
       const json = await fraudP;
       setData(json);
-      ttsP.then((tts: { affiliates?: { affiliateId?: string; signupToFtsSecMedian: number | null; googleSimilarity?: number | null; fts: number }[] }) => {
+      ttsP.then((tts: { overall?: TtsOverall; affiliates?: { affiliateId?: string; signupToFtsSecMedian: number | null; googleSimilarity?: number | null; fts: number }[] }) => {
+        if (tts?.overall) setTtsOverall(tts.overall);
         if (!tts?.affiliates) return;
         const m = new Map<string, TtsPerAffiliate>();
         for (const r of tts.affiliates) {
@@ -573,9 +580,6 @@ export default function FraudPage() {
         case 'risk':       return a.risk.score;
         case 'clicks':     return a.referrals;
         case 'convRate':   return a.risk.stats.convRate;
-        case 'selfRef':    return a.risk.stats.selfReferralCount;
-        case 'sharedCust': return a.risk.stats.sharedCustomerCount;
-        case 'refundRate': return a.risk.stats.refundRate;
         case 'instant':    return a.risk.stats.instantConvPct;
         case 'signupToFts': return tts?.signupToFtsSecMedian ?? Number.POSITIVE_INFINITY;
         case 'googleSim':  return tts?.googleSimilarity ?? -1;
@@ -640,6 +644,24 @@ export default function FraudPage() {
                 <p className="text-2xl font-bold text-gray-900 mt-1">✓ {data.summary.cleared}</p>
               </div>
             </div>
+            {/* PostHog sign-up → first paid baselines (April-May 2026 window) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+                <p className="text-xs font-semibold text-indigo-700">Median sign-up to pay time (overall)</p>
+                <p className={`text-2xl font-bold mt-1 ${ttsTone(ttsOverall?.signupToFtsSecMedian ?? null)}`}>
+                  {ttsOverall ? fmtDuration(ttsOverall.signupToFtsSecMedian) : <span className="text-gray-400 animate-pulse">…</span>}
+                </p>
+                <p className="text-xs text-indigo-600/70 mt-0.5">Across all FTS users in window ({ttsOverall ? (ttsOverall.googleFts + ttsOverall.restFts).toLocaleString() : '—'})</p>
+              </div>
+              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                <p className="text-xs font-semibold text-red-700">🎯 Median sign-up to pay time (Google brand search)</p>
+                <p className={`text-2xl font-bold mt-1 ${ttsTone(ttsOverall?.googleSignupToFtsSecMedian ?? null)}`}>
+                  {ttsOverall ? fmtDuration(ttsOverall.googleSignupToFtsSecMedian) : <span className="text-gray-400 animate-pulse">…</span>}
+                </p>
+                <p className="text-xs text-red-600/70 mt-0.5">Brand-search intercept baseline ({ttsOverall ? ttsOverall.googleFts.toLocaleString() : '—'} FTS). Suspicious affiliates match this.</p>
+              </div>
+            </div>
+
             {/* Cross-affiliate / refund / self-referral anomaly summary */}
             <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
               <div className="bg-red-50 border border-red-200 rounded-xl p-3">
@@ -707,11 +729,8 @@ export default function FraudPage() {
                   <th title="Top 3 fraud signals that fired" className="text-left px-3 py-3 font-medium">Top signals</th>
                   <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="clicks" label="Clicks" align="right" title="Total referrals (?via=token clicks)" />
                   <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="convRate" label="Click→Pay" align="right" title="Paid / Clicks. >40% is suspicious." />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="selfRef" label="Self-ref" align="right" title="Customer email == affiliate email" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="sharedCust" label="Shared cust" align="right" title="Customer under multiple affiliates" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="refundRate" label="Refund %" align="right" title="% commissions voided/refunded" />
                   <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="instant" label="Instant %" align="right" title="% of conversions in <5 min" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="signupToFts" label="Signup→Pay" align="right" title="Median sign_up → first paid" />
+                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="signupToFts" label="Median sign-up to pay" align="right" title="Median sign_up → first paid (PostHog)" />
                   <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="googleSim" label="vs Google" align="left" title="Similarity to Google brand-search baseline" />
                   <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="unpaid" label="Unpaid" align="right" title="Unpaid commission balance" />
                   <th title="Manual review state" className="text-right px-4 py-3 font-medium">Review</th>
@@ -758,15 +777,6 @@ export default function FraudPage() {
                     <td className="px-3 py-3 text-right text-gray-700">{a.referrals}</td>
                     <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.convRate > 0.4 ? 'text-red-600' : 'text-gray-700'}`}>
                       {(a.risk.stats.convRate * 100).toFixed(0)}%
-                    </td>
-                    <td className={`px-3 py-3 text-right text-xs ${a.risk.stats.selfReferralCount > 0 ? 'text-red-600 font-bold' : 'text-gray-300'}`}>
-                      {a.risk.stats.selfReferralCount > 0 ? a.risk.stats.selfReferralCount : '—'}
-                    </td>
-                    <td className={`px-3 py-3 text-right text-xs ${a.risk.stats.sharedCustomerCount > 0 ? 'text-orange-600 font-bold' : 'text-gray-300'}`}>
-                      {a.risk.stats.sharedCustomerCount > 0 ? a.risk.stats.sharedCustomerCount : '—'}
-                    </td>
-                    <td className={`px-3 py-3 text-right text-xs ${a.risk.stats.refundRate >= 0.15 ? 'text-amber-600 font-bold' : 'text-gray-300'}`}>
-                      {a.risk.stats.refundRate > 0 ? `${(a.risk.stats.refundRate * 100).toFixed(0)}%` : '—'}
                     </td>
                     <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.instantConvPct > 0.4 ? 'text-red-600' : 'text-gray-400'}`}>
                       {a.risk.stats.instantConvPct > 0 ? `${(a.risk.stats.instantConvPct * 100).toFixed(0)}%` : '—'}

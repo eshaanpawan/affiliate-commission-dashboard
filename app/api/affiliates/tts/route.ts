@@ -143,6 +143,7 @@ export async function GET(req: NextRequest) {
   // 4. Build baseline rows
   const googleSignupToFts = median(googleTimings.map(t => t.signupToFtsSec).filter((x): x is number => x !== null));
   const restSignupToFts = median(restTimings.map(t => t.signupToFtsSec).filter((x): x is number => x !== null));
+  const overallSignupToFts = median(timings.map(t => t.signupToFtsSec).filter((x): x is number => x !== null));
 
   const googleRow: FunnelRow = {
     label: '🎯 Google (brand-search baseline)',
@@ -210,6 +211,13 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     window: { from: from.toISOString(), to: to.toISOString() },
     totalFts: timings.length,
+    overall: {
+      signupToFtsSecMedian: overallSignupToFts,
+      googleSignupToFtsSecMedian: googleSignupToFts,
+      restSignupToFtsSecMedian: restSignupToFts,
+      googleFts: googleTimings.length,
+      restFts: restTimings.length,
+    },
     baselines: [googleRow, restRow],
     affiliates: affiliateRows,
   });
