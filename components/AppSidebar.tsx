@@ -4,10 +4,14 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   Banknote,
+  CalendarRange,
+  Filter,
   Gauge,
+  Globe,
   LogOut,
   ScrollText,
   Siren,
+  Trophy,
   Users,
 } from 'lucide-react';
 
@@ -28,10 +32,14 @@ import {
 
 const NAV = [
   { href: '/', label: 'Overview', icon: Gauge },
+  { href: '/monthly', label: 'Monthly', icon: CalendarRange },
+  { href: '/affiliates', label: 'Affiliates', icon: Users },
+  { href: '/countries', label: 'Countries', icon: Globe },
+  { href: '/leaderboard', label: 'Leaderboard', icon: Trophy },
+  { href: '/funnel', label: 'Funnel vs Google', icon: Filter },
   { href: '/warroom', label: 'Fraud War Room', icon: Siren, badgeKey: 'highRisk' as const },
   { href: '/payouts', label: 'Payout Review', icon: Banknote, badgeKey: 'heldCount' as const },
   { href: '/enforcement', label: 'Enforcement Log', icon: ScrollText },
-  { href: '/fraud', label: 'Legacy Audit', icon: Users },
 ];
 
 export function AppSidebar({ badges }: { badges?: { highRisk?: number; heldCount?: number } }) {
