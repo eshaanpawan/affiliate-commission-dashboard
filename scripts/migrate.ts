@@ -134,6 +134,69 @@ async function migrate() {
     )
   `;
 
+  // ---- Ad-detection ground truth from PostHog (per token, per day) ----
+  await sql`
+    CREATE TABLE IF NOT EXISTS affiliate_traffic (
+      via_token TEXT NOT NULL,
+      day DATE NOT NULL,
+      signups INT DEFAULT 0,
+      signups_with_gclid INT DEFAULT 0,
+      signups_with_gbraid INT DEFAULT 0,
+      signups_with_gad_campaignid INT DEFAULT 0,
+      signups_with_any_ad_param INT DEFAULT 0,
+      fts INT DEFAULT 0,
+      pageviews INT DEFAULT 0,
+      campaign_ids TEXT[] DEFAULT '{}',
+      campaign_ids_ours TEXT[] DEFAULT '{}',
+      synced_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (via_token, day)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_affiliate_traffic_day ON affiliate_traffic (day)`;
+
+  // ---- Enforcement (staged bans, applied to Rewardful only via explicit bulk action) ----
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS enforcement_state TEXT DEFAULT 'none'`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS enforcement_reason TEXT`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS enforcement_proposed_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS enforcement_applied_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS rewardful_state_before TEXT`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_affiliates_enforcement ON affiliates (enforcement_state)`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS enforcement_log (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      affiliate_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      actor TEXT DEFAULT 'dashboard',
+      payload JSONB,
+      result TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_enforcement_log_affiliate ON enforcement_log (affiliate_id)`;
+
+  // ---- Commission freeze / payout review ----
+  await sql`
+    CREATE TABLE IF NOT EXISTS commission_holds (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      affiliate_id TEXT UNIQUE NOT NULL,
+      amount_cents INT DEFAULT 0,
+      reason TEXT,
+      status TEXT DEFAULT 'held',
+      decided_by TEXT,
+      decided_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
+  // ---- Data repair: commissions.affiliate_id is NULL on legacy rows; sales has it ----
+  await sql`
+    UPDATE commissions c SET affiliate_id = s.affiliate_id
+    FROM sales s
+    WHERE c.sale_id = s.rewardful_id AND c.affiliate_id IS NULL AND s.affiliate_id IS NOT NULL
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_commissions_affiliate_id ON commissions (affiliate_id)`;
+
   console.log('✅ All tables created successfully.');
 }
 

@@ -133,7 +133,13 @@ export async function GET(req: NextRequest) {
   `) as unknown as (AffiliateRow & { link_token: string })[];
 
   const tokenToAffId = new Map<string, string>();
-  for (const r of tokenAffRows) tokenToAffId.set(r.link_token, r.rewardful_id);
+  const tokensByAffiliate = new Map<string, string[]>();
+  for (const r of tokenAffRows) {
+    tokenToAffId.set(r.link_token, r.rewardful_id);
+    const list = tokensByAffiliate.get(r.rewardful_id) ?? [];
+    list.push(r.link_token);
+    tokensByAffiliate.set(r.rewardful_id, list);
+  }
 
   const affiliateIds = [...new Set(tokenAffRows.map(r => r.rewardful_id))];
   const affRows = affiliateIds.length === 0 ? [] : (await sql`
@@ -232,11 +238,16 @@ export async function GET(req: NextRequest) {
     const sf = list.map(t => t.signupToFtsSec).filter((x): x is number => x !== null);
     const med = median(sf);
 
-    // PostHog by-token counts (consistent attribution: $initial_current_url contains ?via=token)
-    const tok = aff.primary_link_token;
-    const phSignups = tok ? (signupsByToken.get(tok) ?? 0) : 0;
-    const phPageviews = tok ? (pageviewsByToken.get(tok) ?? 0) : 0;
-    const phFts = tok ? (ftsByToken.get(tok) ?? 0) : 0;
+    // PostHog by-token counts (consistent attribution: $initial_current_url contains ?via=token).
+    // Sum across ALL tokens this affiliate owns — not just the primary one.
+    const tokens = new Set<string>(tokensByAffiliate.get(affId) ?? []);
+    if (aff.primary_link_token) tokens.add(aff.primary_link_token);
+    let phSignups = 0, phPageviews = 0, phFts = 0;
+    for (const tk of tokens) {
+      phSignups += signupsByToken.get(tk) ?? 0;
+      phPageviews += pageviewsByToken.get(tk) ?? 0;
+      phFts += ftsByToken.get(tk) ?? 0;
+    }
     const suToFtsRate = phSignups > 0 ? phFts / phSignups : null;
 
     // Similarity to Google baseline (uses email-matched per-user timings)
@@ -251,7 +262,16 @@ export async function GET(req: NextRequest) {
 
     // Country breakdown of FTS users for this affiliate, from PostHog person-level
     // geo (server-side events have $geoip_disable=true so we can't use event geo).
-    const countries = tok ? (countriesByToken.get(tok) ?? []) : [];
+    // Merge country counts across all of this affiliate's tokens.
+    const countryAgg = new Map<string, { code: string; name: string; count: number }>();
+    for (const tk of tokens) {
+      for (const c of countriesByToken.get(tk) ?? []) {
+        const cur = countryAgg.get(c.code);
+        if (cur) cur.count += c.count;
+        else countryAgg.set(c.code, { ...c });
+      }
+    }
+    const countries = [...countryAgg.values()].sort((a, b) => b.count - a.count);
 
     affiliateRows.push({
       label: [aff.first_name, aff.last_name].filter(Boolean).join(' ') || aff.email || '?',

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/db';
+import { isAuthed } from '@/lib/auth';
 
 const ALLOWED_STATUSES = new Set(['unreviewed', 'flagged', 'cleared', 'paused']);
 const ALLOWED_TAGS = new Set([
@@ -19,6 +20,10 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  if (!(await isAuthed(req))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { id } = await context.params;
   const body = await req.json().catch(() => ({}));
 
@@ -37,15 +42,8 @@ export async function POST(
 
   const now = new Date().toISOString();
 
-  // Auto-migrate fraud_tags column on first save (idempotent ALTER).
-  if (fraudTags !== undefined) {
-    try {
-      await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS fraud_tags JSONB DEFAULT '[]'::jsonb`;
-    } catch (e) {
-      console.error('Could not ensure fraud_tags column:', e);
-    }
-  }
-
+  // The fraud_tags column is created by scripts/migrate.ts and /api/admin/migrate.
+  // A request handler must never run DDL.
   if (fraudTags !== undefined) {
     await sql`
       UPDATE affiliates

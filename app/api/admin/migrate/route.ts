@@ -110,6 +110,64 @@ export async function POST(req: NextRequest) {
   await run('idx_affiliates_review_status', () => sql`CREATE INDEX IF NOT EXISTS idx_affiliates_review_status ON affiliates (review_status)`);
   await run('idx_affiliates_risk_score', () => sql`CREATE INDEX IF NOT EXISTS idx_affiliates_risk_score ON affiliates (risk_score)`);
 
+  // Ad-detection ground truth from PostHog (per token, per day)
+  await run('affiliate_traffic table', () => sql`
+    CREATE TABLE IF NOT EXISTS affiliate_traffic (
+      via_token TEXT NOT NULL,
+      day DATE NOT NULL,
+      signups INT DEFAULT 0,
+      signups_with_gclid INT DEFAULT 0,
+      signups_with_gbraid INT DEFAULT 0,
+      signups_with_gad_campaignid INT DEFAULT 0,
+      signups_with_any_ad_param INT DEFAULT 0,
+      fts INT DEFAULT 0,
+      pageviews INT DEFAULT 0,
+      campaign_ids TEXT[] DEFAULT '{}',
+      campaign_ids_ours TEXT[] DEFAULT '{}',
+      synced_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (via_token, day)
+    )`);
+  await run('idx_affiliate_traffic_day', () => sql`CREATE INDEX IF NOT EXISTS idx_affiliate_traffic_day ON affiliate_traffic (day)`);
+
+  // Enforcement (staged bans, applied to Rewardful only via explicit bulk action)
+  await run('affiliates.enforcement_state', () => sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS enforcement_state TEXT DEFAULT 'none'`);
+  await run('affiliates.enforcement_reason', () => sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS enforcement_reason TEXT`);
+  await run('affiliates.enforcement_proposed_at', () => sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS enforcement_proposed_at TIMESTAMPTZ`);
+  await run('affiliates.enforcement_applied_at', () => sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS enforcement_applied_at TIMESTAMPTZ`);
+  await run('affiliates.rewardful_state_before', () => sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS rewardful_state_before TEXT`);
+  await run('idx_affiliates_enforcement', () => sql`CREATE INDEX IF NOT EXISTS idx_affiliates_enforcement ON affiliates (enforcement_state)`);
+
+  await run('enforcement_log table', () => sql`
+    CREATE TABLE IF NOT EXISTS enforcement_log (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      affiliate_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      actor TEXT DEFAULT 'dashboard',
+      payload JSONB,
+      result TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  await run('idx_enforcement_log_affiliate', () => sql`CREATE INDEX IF NOT EXISTS idx_enforcement_log_affiliate ON enforcement_log (affiliate_id)`);
+
+  // Commission freeze / payout review
+  await run('commission_holds table', () => sql`
+    CREATE TABLE IF NOT EXISTS commission_holds (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      affiliate_id TEXT UNIQUE NOT NULL,
+      amount_cents INT DEFAULT 0,
+      reason TEXT,
+      status TEXT DEFAULT 'held',
+      decided_by TEXT,
+      decided_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+  // NOTE: migrate.ts also has an `UPDATE commissions ... FROM sales` data-repair
+  // statement. It is intentionally NOT mirrored here — commissions.sale_id is NULL
+  // on legacy rows so it matches 0 rows; the real fix is
+  // scripts/backfill-commission-affiliates.ts (re-fetches from the Rewardful API).
+  await run('idx_commissions_affiliate_id', () => sql`CREATE INDEX IF NOT EXISTS idx_commissions_affiliate_id ON commissions (affiliate_id)`);
+
   return NextResponse.json({
     ok: true,
     appliedCount: applied.length,

@@ -7,6 +7,7 @@ import { ArrowDown, ArrowUp, ChevronDown, ChevronsUpDown, Flag, Info, RefreshCw 
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 
 import { MetricCard } from '@/components/MetricCard';
+import { MonthlySummary } from '@/components/MonthlySummary';
 import { DayOnDayChart } from '@/components/DayOnDayChart';
 import { TopAffiliatesPie } from '@/components/TopAffiliatesPie';
 import { SectionCard } from '@/components/SectionCard';
@@ -624,6 +625,11 @@ export default function Dashboard() {
           </Table>
         </SectionCard>
       )}
+
+      {/* Rewardful-style monthly summary */}
+      <div className="mb-8">
+        <MonthlySummary />
+      </div>
 
       {/* Month-on-Month */}
       {data.monthly.length > 0 && (

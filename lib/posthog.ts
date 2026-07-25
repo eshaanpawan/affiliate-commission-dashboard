@@ -36,7 +36,7 @@ export interface FunnelTiming {
   pvToFtsSec: number | null;
 }
 
-async function runHogQL(query: string): Promise<HogQLResponse | null> {
+export async function runHogQL(query: string): Promise<HogQLResponse | null> {
   const apiKey = process.env.POSTHOG_API_KEY;
   const projectId = process.env.POSTHOG_PROJECT_ID;
   if (!apiKey || !projectId) {
@@ -447,14 +447,6 @@ export async function getFunnelTimingsForFTS(
 }
 
 export async function getConversionCountriesByEmail(): Promise<Map<string, CountryData>> {
-  const apiKey = process.env.POSTHOG_API_KEY;
-  const projectId = process.env.POSTHOG_PROJECT_ID;
-
-  if (!apiKey || !projectId) {
-    console.warn('[posthog] POSTHOG_API_KEY or POSTHOG_PROJECT_ID not set — skipping country enrichment');
-    return new Map();
-  }
-
   const query = `
     SELECT
       s.distinct_id,
@@ -484,24 +476,8 @@ export async function getConversionCountriesByEmail(): Promise<Map<string, Count
     LIMIT 50000
   `;
 
-  const res = await fetch(
-    `https://us.posthog.com/api/projects/${projectId}/query`,
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ query: { kind: 'HogQLQuery', query } }),
-    }
-  );
-
-  if (!res.ok) {
-    console.error('[posthog] Query failed:', res.status, await res.text());
-    return new Map();
-  }
-
-  const data = await res.json() as HogQLResponse;
+  const data = await runHogQL(query);
+  if (!data) return new Map();
 
   if (data.error) {
     console.error('[posthog] HogQL error:', data.error);

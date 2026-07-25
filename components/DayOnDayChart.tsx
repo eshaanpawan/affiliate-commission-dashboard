@@ -51,10 +51,10 @@ export function DayOnDayChart({ title, data, bars, valuePrefix = '', secondaryKe
           </div>
         ) : (
           <ChartContainer config={config} className="h-[200px] w-full">
-            <ComposedChart data={formatted} margin={{ top: 4, right: secondaryBar ? 12 : 4, left: -18, bottom: 0 }}>
+            <ComposedChart data={formatted} margin={{ top: 4, right: secondaryBar ? 12 : 4, left: 0, bottom: 0 }}>
               <CartesianGrid vertical={false} strokeDasharray="3 3" />
               <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} tick={{ fontSize: 11 }} minTickGap={16} />
-              <YAxis yAxisId="left" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} width={48} />
+              <YAxis yAxisId="left" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
               {secondaryBar && (
                 <YAxis
                   yAxisId="right"
