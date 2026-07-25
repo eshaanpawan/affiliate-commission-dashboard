@@ -85,13 +85,13 @@ function enforcementBadge(state: string) {
 }
 
 const DAILY_CONFIG = {
-  adSignups: { label: 'Ad-driven signups', color: 'var(--chart-4)' },
+  adSignups: { label: 'Ad-driven signups', color: 'var(--chart-1)' },
   organicSignups: { label: 'Organic signups', color: 'var(--chart-2)' },
-  fts: { label: 'Paid conversions (FTS)', color: 'var(--chart-1)' },
+  fts: { label: 'Paid conversions (FTS)', color: 'var(--chart-3)' },
 } satisfies ChartConfig;
 
 const FUNNEL_CONFIG = {
-  ad: { label: 'Ad-driven', color: 'var(--chart-4)' },
+  ad: { label: 'Ad-driven', color: 'var(--chart-1)' },
   organic: { label: 'Organic', color: 'var(--chart-2)' },
 } satisfies ChartConfig;
 
@@ -210,11 +210,11 @@ function AffiliateSheet({ a, onClose, onAction, busy }: {
                     <div className="bg-muted h-4 flex-1 overflow-hidden rounded">
                       {f.ad !== null ? (
                         <div className="flex h-full" style={{ width: `${(f.total / max) * 100}%` }}>
-                          <div className="h-full bg-[var(--chart-4)]" style={{ width: `${f.total ? (f.ad / f.total) * 100 : 0}%` }} />
+                          <div className="h-full bg-[var(--chart-1)]" style={{ width: `${f.total ? (f.ad / f.total) * 100 : 0}%` }} />
                           <div className="h-full bg-[var(--chart-2)]" style={{ width: `${f.total ? ((f.organic ?? 0) / f.total) * 100 : 0}%` }} />
                         </div>
                       ) : (
-                        <div className="h-full bg-[var(--chart-1)]" style={{ width: `${(f.total / max) * 100}%` }} />
+                        <div className="h-full bg-[var(--chart-3)]" style={{ width: `${(f.total / max) * 100}%` }} />
                       )}
                     </div>
                     <span className="w-16 text-right font-medium tabular-nums">{fmtInt(f.total)}</span>

@@ -279,16 +279,16 @@ export default function Dashboard() {
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
   const [selectedAffiliate, setSelectedAffiliate] = useState<Affiliate | null>(null);
   const [period, setPeriod] = useState<'7d' | '30d' | '90d' | 'all'>('all');
-  const [affiliatesExpanded, setAffiliatesExpanded] = useState(false);
-  const [monthlyExpanded, setMonthlyExpanded] = useState(false);
-  const [topAffiliatesExpanded, setTopAffiliatesExpanded] = useState(false);
+  const [affiliatesExpanded, setAffiliatesExpanded] = useState(true);
+  const [monthlyExpanded, setMonthlyExpanded] = useState(true);
+  const [topAffiliatesExpanded, setTopAffiliatesExpanded] = useState(true);
   const [last30Expanded, setLast30Expanded] = useState(true);
-  const [leaderboardExpanded, setLeaderboardExpanded] = useState(false);
+  const [leaderboardExpanded, setLeaderboardExpanded] = useState(true);
   const [countryView, setCountryView] = useState<'chart' | 'table'>('chart');
-  const [affiliateCountriesExpanded, setAffiliateCountriesExpanded] = useState(false);
+  const [affiliateCountriesExpanded, setAffiliateCountriesExpanded] = useState(true);
   const [expandedAffiliateCountries, setExpandedAffiliateCountries] = useState<Set<string>>(new Set());
   const [affiliateCountryView, setAffiliateCountryView] = useState<Record<string, 'chart' | 'table'>>({});
-  const [ttsExpanded, setTtsExpanded] = useState(false);
+  const [ttsExpanded, setTtsExpanded] = useState(true);
   const [ttsData, setTtsData] = useState<TtsResponse | null>(null);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsFrom, setTtsFrom] = useState('2025-01-01');
@@ -511,6 +511,11 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
+      {/* Rewardful-style monthly summary — pinned directly under the overview */}
+      <div className="mb-8">
+        <MonthlySummary />
+      </div>
+
       {/* Day-on-day charts */}
       <SectionCard
         className="mb-8"
@@ -626,11 +631,6 @@ export default function Dashboard() {
         </SectionCard>
       )}
 
-      {/* Rewardful-style monthly summary */}
-      <div className="mb-8">
-        <MonthlySummary />
-      </div>
-
       {/* Month-on-Month */}
       {data.monthly.length > 0 && (
         <SectionCard
@@ -728,6 +728,38 @@ export default function Dashboard() {
         {data.weeklyLeaderboard.length === 0 ? (
           <div className="text-muted-foreground p-8 text-center text-sm">No conversions this week yet.</div>
         ) : (
+          <>
+          <div className="border-b p-5">
+            <ChartContainer
+              config={{
+                conversionsThisWeek: { label: 'Conversions', color: 'var(--chart-2)' },
+                referralsThisWeek: { label: 'Referrals', color: 'var(--chart-1)' },
+              }}
+              className="h-[260px] w-full"
+            >
+              <BarChart
+                data={data.weeklyLeaderboard.slice(0, 10)}
+                layout="vertical"
+                margin={{ top: 0, right: 8, left: 8, bottom: 0 }}
+              >
+                <CartesianGrid horizontal={false} strokeDasharray="3 3" />
+                <XAxis type="number" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} allowDecimals={false} />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fontSize: 11 }}
+                  width={140}
+                  tickFormatter={(v: string) => (v.length > 18 ? v.slice(0, 18) + '…' : v)}
+                />
+                <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
+                <ChartLegend content={<ChartLegendContent />} />
+                <Bar dataKey="conversionsThisWeek" fill="var(--color-conversionsThisWeek)" radius={[0, 3, 3, 0]} />
+                <Bar dataKey="referralsThisWeek" fill="var(--color-referralsThisWeek)" radius={[0, 3, 3, 0]} />
+              </BarChart>
+            </ChartContainer>
+          </div>
           <Table>
             <TableHeader>
               <TableRow>
@@ -759,6 +791,7 @@ export default function Dashboard() {
               ))}
             </TableBody>
           </Table>
+          </>
         )}
       </SectionCard>
 
