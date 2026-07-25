@@ -1,5 +1,7 @@
 'use client';
 
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+
 interface MetricCardProps {
   label: string;
   value: string | number;
@@ -8,10 +10,16 @@ interface MetricCardProps {
 
 export function MetricCard({ label, value, sub }: MetricCardProps) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <p className="text-sm text-gray-500 font-medium">{label}</p>
-      <p className="text-2xl font-bold text-gray-900 mt-1">{value}</p>
-      {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
-    </div>
+    <Card className="gap-0 py-4">
+      <CardHeader className="px-4">
+        <CardDescription>{label}</CardDescription>
+        <CardTitle className="mt-1 text-2xl tabular-nums">{value}</CardTitle>
+      </CardHeader>
+      {sub && (
+        <CardContent className="px-4">
+          <p className="text-muted-foreground mt-1 text-xs">{sub}</p>
+        </CardContent>
+      )}
+    </Card>
   );
 }

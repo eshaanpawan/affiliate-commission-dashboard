@@ -2,7 +2,22 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
+import { ArrowDown, ArrowLeft, ArrowUp, ChevronsUpDown, ExternalLink, RefreshCw, Search } from 'lucide-react';
+
 import { fmtDuration, ttsTone, similarityTone } from '@/lib/format';
+import { cn } from '@/lib/utils';
+
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface RiskSignal {
   key: string;
@@ -75,13 +90,19 @@ const FRAUD_TAG_OPTIONS: { key: string; label: string; emoji: string }[] = [
 
 function FraudTagPill({ tag }: { tag: string }) {
   const opt = FRAUD_TAG_OPTIONS.find(o => o.key === tag);
-  const cls = tag === 'verified_legit'
-    ? 'bg-emerald-50 text-emerald-700'
-    : 'bg-red-50 text-red-700';
+  const positive = tag === 'verified_legit';
   return (
-    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${cls}`}>
+    <Badge
+      variant="secondary"
+      className={cn(
+        'text-[10px]',
+        positive
+          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+          : 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300',
+      )}
+    >
       {opt?.emoji ?? '🚩'} {opt?.label ?? tag.replace(/_/g, ' ')}
-    </span>
+    </Badge>
   );
 }
 
@@ -144,21 +165,21 @@ function formatTtc(sec: number | null): string {
   return `${Math.round(sec / 86400)}d`;
 }
 
-function bandColor(band: string) {
-  return band === 'high' ? 'bg-red-100 text-red-700 border-red-200'
-    : band === 'medium' ? 'bg-amber-100 text-amber-700 border-amber-200'
-    : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+function bandClass(band: string) {
+  return band === 'high' ? 'border-red-200 bg-red-100 text-red-700 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-300'
+    : band === 'medium' ? 'border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
+    : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300';
 }
 
-function reviewBadgeColor(status: string) {
-  return status === 'flagged' ? 'bg-red-100 text-red-700'
-    : status === 'cleared' ? 'bg-emerald-100 text-emerald-700'
-    : status === 'paused' ? 'bg-gray-200 text-gray-700'
-    : 'bg-gray-100 text-gray-500';
+function reviewBadgeClass(status: string) {
+  return status === 'flagged' ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
+    : status === 'cleared' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+    : status === 'paused' ? 'bg-muted-foreground/20 text-foreground'
+    : 'bg-muted text-muted-foreground';
 }
 
 function severityDot(sev: string) {
-  return sev === 'high' ? 'bg-red-500' : sev === 'medium' ? 'bg-amber-500' : 'bg-gray-300';
+  return sev === 'high' ? 'bg-red-500' : sev === 'medium' ? 'bg-amber-500' : 'bg-muted-foreground/40';
 }
 
 function googleBrandCheckUrl(name: string) {
@@ -225,60 +246,56 @@ function FraudModal({ affiliate, tts, onClose, onReviewUpdate }: {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl mx-4 p-6 overflow-y-auto max-h-[92vh]" onClick={(e) => e.stopPropagation()}>
-
-        {/* Header */}
-        <div className="flex items-start justify-between mb-5">
-          <div>
-            <div className="flex items-center gap-3 mb-1">
-              <h2 className="text-lg font-bold text-gray-900">{affiliate.name}</h2>
-              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${bandColor(affiliate.risk.band)}`}>
-                Risk {affiliate.risk.score} · {affiliate.risk.band.toUpperCase()}
-              </span>
-              <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${reviewBadgeColor(affiliate.reviewStatus)}`}>
-                {affiliate.reviewStatus}
-              </span>
-            </div>
-            <p className="text-sm text-gray-400">{affiliate.email}</p>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-4xl">
+        <DialogHeader>
+          <div className="flex flex-wrap items-center gap-3">
+            <DialogTitle>{affiliate.name}</DialogTitle>
+            <Badge variant="outline" className={bandClass(affiliate.risk.band)}>
+              Risk {affiliate.risk.score} · {affiliate.risk.band.toUpperCase()}
+            </Badge>
+            <Badge variant="secondary" className={reviewBadgeClass(affiliate.reviewStatus)}>{affiliate.reviewStatus}</Badge>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">✕</button>
-        </div>
+          <DialogDescription>{affiliate.email}</DialogDescription>
+        </DialogHeader>
 
         {/* Quick action investigation links */}
-        <div className="flex flex-wrap gap-2 mb-5">
-          <a href={googleBrandCheckUrl(affiliate.name)} target="_blank" rel="noreferrer"
-             className="text-xs px-2.5 py-1.5 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium">
-            🔍 Google "runable {affiliate.name}"
-          </a>
-          <a href={googleSiteSearchUrl(affiliate.name)} target="_blank" rel="noreferrer"
-             className="text-xs px-2.5 py-1.5 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium">
-            🔍 Find affiliate page
-          </a>
-          {affiliate.email && (
-            <a href={`https://www.google.com/search?q=${encodeURIComponent(affiliate.email.split('@')[0])}`}
-               target="_blank" rel="noreferrer"
-               className="text-xs px-2.5 py-1.5 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium">
-              🔍 Search by handle
+        <div className="flex flex-wrap gap-2">
+          <Button asChild size="sm" variant="secondary">
+            <a href={googleBrandCheckUrl(affiliate.name)} target="_blank" rel="noreferrer">
+              <Search className="size-3.5" /> Google &ldquo;runable {affiliate.name}&rdquo;
             </a>
+          </Button>
+          <Button asChild size="sm" variant="secondary">
+            <a href={googleSiteSearchUrl(affiliate.name)} target="_blank" rel="noreferrer">
+              <Search className="size-3.5" /> Find affiliate page
+            </a>
+          </Button>
+          {affiliate.email && (
+            <Button asChild size="sm" variant="secondary">
+              <a href={`https://www.google.com/search?q=${encodeURIComponent(affiliate.email.split('@')[0])}`} target="_blank" rel="noreferrer">
+                <Search className="size-3.5" /> Search by handle
+              </a>
+            </Button>
           )}
           {detail?.linkTokens.slice(0, 2).map((token) => (
-            <a key={token} href={`https://runable.com/?via=${token}`} target="_blank" rel="noreferrer"
-               className="text-xs px-2.5 py-1.5 rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 font-mono">
-              ↗ ?via={token}
-            </a>
+            <Button key={token} asChild size="sm" variant="outline" className="font-mono">
+              <a href={`https://runable.com/?via=${token}`} target="_blank" rel="noreferrer">
+                <ExternalLink className="size-3.5" /> ?via={token}
+              </a>
+            </Button>
           ))}
           {detail?.linkTokens[0] && (
-            <a href={`https://www.google.com/search?q=${encodeURIComponent(`"via=${detail.linkTokens[0]}"`)}`}
-               target="_blank" rel="noreferrer"
-               className="text-xs px-2.5 py-1.5 rounded-md bg-amber-50 text-amber-700 hover:bg-amber-100 font-medium">
-              🔍 Where they post links
-            </a>
+            <Button asChild size="sm" variant="outline" className="border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-500/30 dark:text-amber-300">
+              <a href={`https://www.google.com/search?q=${encodeURIComponent(`"via=${detail.linkTokens[0]}"`)}`} target="_blank" rel="noreferrer">
+                <Search className="size-3.5" /> Where they post links
+              </a>
+            </Button>
           )}
         </div>
 
         {/* Stats grid */}
-        <div className="grid grid-cols-3 md:grid-cols-6 gap-3 mb-5">
+        <div className="grid grid-cols-3 gap-3 md:grid-cols-6">
           <Stat label="Referrals" value={affiliate.referrals.toString()} />
           <Stat label="Conversions" value={affiliate.conversions.toString()} />
           <Stat label="Conv Rate" value={`${(affiliate.risk.stats.convRate * 100).toFixed(0)}%`}
@@ -290,7 +307,7 @@ function FraudModal({ affiliate, tts, onClose, onReviewUpdate }: {
           <Stat label="Median TTC" value={formatTtc(affiliate.risk.stats.medianTimeToConvSec)} />
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-5">
+        <div className="grid grid-cols-2 gap-3">
           <Stat label="Unpaid (at risk)" value={fmt(affiliate.unpaidCommissionCents)}
                 tone={affiliate.risk.band === 'high' ? 'danger' : undefined} />
           <Stat label="Already paid" value={fmt(affiliate.paidCommissionCents)} />
@@ -298,61 +315,61 @@ function FraudModal({ affiliate, tts, onClose, onReviewUpdate }: {
 
         {/* Other affiliates with the same first+last name (multi-account ring indicator) */}
         {affiliate.duplicateNames && affiliate.duplicateNames.length > 0 && (
-          <div className="mb-5">
-            <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">
+          <div>
+            <h3 className="text-muted-foreground mb-2 text-xs font-semibold uppercase">
               ⚠️ Other affiliates with the same name ({affiliate.duplicateNames.length})
             </h3>
-            <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-1.5">
+            <div className="space-y-1.5 rounded-lg border border-orange-200 bg-orange-50 p-3 dark:border-orange-500/30 dark:bg-orange-500/10">
               {affiliate.duplicateNames.map((d) => (
-                <div key={d.id} className="text-sm flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-gray-900">{d.name}</span>
-                  {d.email && <span className="text-xs text-gray-500 font-mono">&lt;{d.email}&gt;</span>}
-                  <span className="text-[10px] font-mono text-gray-400">{d.id.slice(0, 8)}…</span>
+                <div key={d.id} className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="font-medium">{d.name}</span>
+                  {d.email && <span className="text-muted-foreground font-mono text-xs">&lt;{d.email}&gt;</span>}
+                  <span className="text-muted-foreground font-mono text-[10px]">{d.id.slice(0, 8)}…</span>
                 </div>
               ))}
             </div>
-            <p className="text-[11px] text-gray-500 mt-1.5">Same first+last name across multiple accounts. Could be a multi-account ring or a coincidence — verify by checking funnel pages, signup IPs, and payout details.</p>
+            <p className="text-muted-foreground mt-1.5 text-[11px]">Same first+last name across multiple accounts. Could be a multi-account ring or a coincidence — verify by checking funnel pages, signup IPs, and payout details.</p>
           </div>
         )}
 
         {/* Country breakdown of FTS customers (from PostHog $pageview geo) */}
         {tts?.countries && tts.countries.length > 0 && (
-          <div className="mb-5">
-            <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Where this affiliate's paid customers come from</h3>
+          <div>
+            <h3 className="text-muted-foreground mb-2 text-xs font-semibold uppercase">Where this affiliate&apos;s paid customers come from</h3>
             <div className="flex flex-wrap gap-2">
               {tts.countries.slice(0, 12).map((c) => (
-                <div key={c.code} className="inline-flex items-center gap-1.5 bg-gray-50 rounded-md px-2 py-1 text-xs">
-                  <span className="font-medium text-gray-900">{c.name}</span>
-                  <span className="text-gray-500">·</span>
-                  <span className="font-mono text-indigo-600">{c.count}</span>
+                <div key={c.code} className="bg-muted inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs">
+                  <span className="font-medium">{c.name}</span>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="font-mono text-indigo-600 dark:text-indigo-400">{c.count}</span>
                 </div>
               ))}
               {tts.countries.length > 12 && (
-                <span className="text-xs text-gray-400 self-center">+{tts.countries.length - 12} more</span>
+                <span className="text-muted-foreground self-center text-xs">+{tts.countries.length - 12} more</span>
               )}
             </div>
-            <p className="text-[11px] text-gray-400 mt-1.5">From PostHog $geoip_country on the customer's latest pageview. Shows {tts.countries.reduce((s, c) => s + c.count, 0)} of {tts.fts} matched FTS (rest had no geo data).</p>
+            <p className="text-muted-foreground mt-1.5 text-[11px]">From PostHog $geoip_country on the customer&apos;s latest pageview. Shows {tts.countries.reduce((s, c) => s + c.count, 0)} of {tts.fts} matched FTS (rest had no geo data).</p>
           </div>
         )}
 
         {/* Signals */}
         {affiliate.risk.signals.length === 0 ? (
-          <div className="text-sm text-gray-500 mb-5 p-3 bg-emerald-50 rounded-lg">
+          <div className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-300">
             ✓ No fraud signals fired for this affiliate.
           </div>
         ) : (
-          <div className="mb-5">
-            <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Why this affiliate is flagged</h3>
+          <div>
+            <h3 className="text-muted-foreground mb-2 text-xs font-semibold uppercase">Why this affiliate is flagged</h3>
             <div className="space-y-2">
               {affiliate.risk.signals.map((s) => (
-                <div key={s.key} className="flex items-start gap-2 p-3 bg-gray-50 rounded-lg">
-                  <span className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${severityDot(s.severity)}`} />
+                <div key={s.key} className="bg-muted flex items-start gap-2 rounded-lg p-3">
+                  <span className={cn('mt-1.5 size-2 shrink-0 rounded-full', severityDot(s.severity))} />
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold text-gray-900">{s.label}</p>
-                      <span className="text-xs font-medium text-gray-500">{s.value}</span>
+                      <p className="text-sm font-semibold">{s.label}</p>
+                      <span className="text-muted-foreground text-xs font-medium">{s.value}</span>
                     </div>
-                    <p className="text-xs text-gray-600 mt-0.5">{s.detail}</p>
+                    <p className="text-muted-foreground mt-0.5 text-xs">{s.detail}</p>
                   </div>
                 </div>
               ))}
@@ -362,32 +379,32 @@ function FraudModal({ affiliate, tts, onClose, onReviewUpdate }: {
 
         {/* Top traffic sources */}
         {loading ? (
-          <div className="h-20 flex items-center justify-center text-gray-400 text-sm">Loading detail...</div>
+          <Skeleton className="h-20 w-full" />
         ) : detail && (
           <>
             {(detail.topReferrers.length > 0 || detail.topLandings.length > 0) && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 {detail.topReferrers.length > 0 && (
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <p className="text-xs font-semibold uppercase text-gray-500 mb-2">Top referrers</p>
-                    <ul className="text-sm space-y-1">
+                  <div className="bg-muted rounded-lg p-3">
+                    <p className="text-muted-foreground mb-2 text-xs font-semibold uppercase">Top referrers</p>
+                    <ul className="space-y-1 text-sm">
                       {detail.topReferrers.map((r) => (
                         <li key={r.host} className="flex justify-between">
-                          <span className={r.host.includes('google') ? 'text-red-700 font-mono' : 'text-gray-700 font-mono'}>{r.host}</span>
-                          <span className="text-gray-500">{r.count}</span>
+                          <span className={cn('font-mono', r.host.includes('google') && 'text-red-600 dark:text-red-400')}>{r.host}</span>
+                          <span className="text-muted-foreground tabular-nums">{r.count}</span>
                         </li>
                       ))}
                     </ul>
                   </div>
                 )}
                 {detail.topLandings.length > 0 && (
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <p className="text-xs font-semibold uppercase text-gray-500 mb-2">Top landing pages</p>
-                    <ul className="text-sm space-y-1">
+                  <div className="bg-muted rounded-lg p-3">
+                    <p className="text-muted-foreground mb-2 text-xs font-semibold uppercase">Top landing pages</p>
+                    <ul className="space-y-1 text-sm">
                       {detail.topLandings.map((r) => (
                         <li key={r.path} className="flex justify-between gap-2">
-                          <span className="text-gray-700 font-mono truncate" title={r.path}>{r.path}</span>
-                          <span className="text-gray-500">{r.count}</span>
+                          <span className="truncate font-mono" title={r.path}>{r.path}</span>
+                          <span className="text-muted-foreground tabular-nums">{r.count}</span>
                         </li>
                       ))}
                     </ul>
@@ -398,45 +415,47 @@ function FraudModal({ affiliate, tts, onClose, onReviewUpdate }: {
 
             {/* Recent referrals table */}
             {detail.referrals.length > 0 && (
-              <div className="mb-5">
-                <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Recent referrals ({detail.referrals.length})</h3>
-                <div className="overflow-x-auto border border-gray-200 rounded-lg">
-                  <table className="w-full text-xs">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="text-left px-2 py-2 font-medium text-gray-500">Created</th>
-                        <th className="text-left px-2 py-2 font-medium text-gray-500">Status</th>
-                        <th className="text-left px-2 py-2 font-medium text-gray-500">TTC</th>
-                        <th className="text-left px-2 py-2 font-medium text-gray-500">Source</th>
-                        <th className="text-left px-2 py-2 font-medium text-gray-500">Customer</th>
-                        <th className="text-left px-2 py-2 font-medium text-gray-500">Flags</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+              <div>
+                <h3 className="text-muted-foreground mb-2 text-xs font-semibold uppercase">Recent referrals ({detail.referrals.length})</h3>
+                <div className="overflow-x-auto rounded-lg border">
+                  <Table className="text-xs">
+                    <TableHeader className="bg-muted">
+                      <TableRow>
+                        <TableHead>Created</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>TTC</TableHead>
+                        <TableHead>Source</TableHead>
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Flags</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {detail.referrals.map((r) => (
-                        <tr key={r.id} className="border-t border-gray-100">
-                          <td className="px-2 py-2 text-gray-600 whitespace-nowrap">{new Date(r.createdAt).toLocaleDateString()}</td>
-                          <td className="px-2 py-2">
-                            <span className={`px-1.5 py-0.5 rounded text-xs ${r.status === 'converted' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{r.status}</span>
-                          </td>
-                          <td className="px-2 py-2 text-gray-600">{r.ttcSeconds !== null && r.ttcSeconds < 300 ? <span className="text-red-600 font-semibold">{formatTtc(r.ttcSeconds)}</span> : formatTtc(r.ttcSeconds)}</td>
-                          <td className="px-2 py-2 text-gray-700 font-mono truncate max-w-[180px]" title={r.referrer ?? ''}>
+                        <TableRow key={r.id}>
+                          <TableCell className="text-muted-foreground whitespace-nowrap">{new Date(r.createdAt).toLocaleDateString()}</TableCell>
+                          <TableCell>
+                            <Badge variant={r.status === 'converted' ? 'default' : 'secondary'} className="text-[10px]">{r.status}</Badge>
+                          </TableCell>
+                          <TableCell className={cn('tabular-nums', r.ttcSeconds !== null && r.ttcSeconds < 300 && 'font-semibold text-red-600 dark:text-red-400')}>
+                            {formatTtc(r.ttcSeconds)}
+                          </TableCell>
+                          <TableCell className="max-w-[180px] truncate font-mono" title={r.referrer ?? ''}>
                             {r.utmSource ? `${r.utmSource}/${r.utmMedium ?? '?'}` : (r.referrer ? new URL(r.referrer).hostname.replace(/^www\./, '') : 'direct')}
-                          </td>
-                          <td className="px-2 py-2 text-gray-600 truncate max-w-[160px]" title={r.customerEmail ?? ''}>{r.customerEmail ?? '—'}</td>
-                          <td className="px-2 py-2">
+                          </TableCell>
+                          <TableCell className="text-muted-foreground max-w-[160px] truncate" title={r.customerEmail ?? ''}>{r.customerEmail ?? '—'}</TableCell>
+                          <TableCell>
                             {r.flags.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
                                 {r.flags.map(f => (
-                                  <span key={f} className="px-1.5 py-0.5 rounded bg-red-50 text-red-700 text-[10px] font-mono">{f}</span>
+                                  <Badge key={f} variant="secondary" className="bg-red-50 font-mono text-[10px] text-red-700 dark:bg-red-500/15 dark:text-red-300">{f}</Badge>
                                 ))}
                               </div>
-                            ) : <span className="text-gray-300">—</span>}
-                          </td>
-                        </tr>
+                            ) : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
+                        </TableRow>
                       ))}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
               </div>
             )}
@@ -444,61 +463,97 @@ function FraudModal({ affiliate, tts, onClose, onReviewUpdate }: {
         )}
 
         {/* Review controls */}
-        <div className="border-t border-gray-200 pt-4">
-          <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Tag fraud type</h3>
-          <p className="text-xs text-gray-400 mb-2">Click to toggle. Tags save automatically.</p>
-          <div className="flex flex-wrap gap-2 mb-4">
+        <Separator />
+        <div>
+          <h3 className="text-muted-foreground mb-2 text-xs font-semibold uppercase">Tag fraud type</h3>
+          <p className="text-muted-foreground mb-2 text-xs">Click to toggle. Tags save automatically.</p>
+          <div className="mb-4 flex flex-wrap gap-2">
             {FRAUD_TAG_OPTIONS.map((opt) => {
               const active = tags.includes(opt.key);
               const isPositive = opt.key === 'verified_legit';
-              const activeCls = isPositive
-                ? 'bg-emerald-600 text-white border-emerald-600'
-                : 'bg-red-600 text-white border-red-600';
-              const inactiveCls = 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50';
               return (
-                <button
+                <Button
                   key={opt.key}
+                  size="sm"
+                  variant={active ? 'default' : 'outline'}
                   disabled={saving}
                   onClick={() => toggleTag(opt.key)}
-                  className={`text-xs px-2.5 py-1 rounded-md border font-medium transition-colors disabled:opacity-50 ${active ? activeCls : inactiveCls}`}
+                  className={cn(
+                    active && (isPositive
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      : 'bg-red-600 text-white hover:bg-red-700'),
+                  )}
                 >
                   {opt.emoji} {opt.label}
-                </button>
+                </Button>
               );
             })}
           </div>
 
-          <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">Manual review</h3>
-          <div className="mb-3">
-            <label className="text-xs text-gray-500 mb-1 block">Known affiliate URL (their site/channel/funnel)</label>
-            <input type="text" value={knownUrl} onChange={(e) => setKnownUrl(e.target.value)}
-                   placeholder="https://..."
-                   className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:border-indigo-400" />
+          <h3 className="text-muted-foreground mb-2 text-xs font-semibold uppercase">Manual review</h3>
+          <div className="mb-3 grid gap-1.5">
+            <Label htmlFor="known-url" className="text-muted-foreground text-xs">Known affiliate URL (their site/channel/funnel)</Label>
+            <Input id="known-url" type="text" value={knownUrl} onChange={(e) => setKnownUrl(e.target.value)} placeholder="https://..." />
           </div>
-          <div className="mb-3">
-            <label className="text-xs text-gray-500 mb-1 block">Review notes</label>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
-                      placeholder="What did you find when you checked them?"
-                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:border-indigo-400" />
+          <div className="mb-3 grid gap-1.5">
+            <Label htmlFor="review-notes" className="text-muted-foreground text-xs">Review notes</Label>
+            <textarea
+              id="review-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              placeholder="What did you find when you checked them?"
+              className="border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 dark:bg-input/30 w-full rounded-md border bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px]"
+            />
           </div>
           <div className="flex flex-wrap gap-2">
-            <button disabled={saving} onClick={() => setStatus('flagged')} className="px-3 py-1.5 text-xs font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">🚩 Flag as fraud</button>
-            <button disabled={saving} onClick={() => setStatus('paused')} className="px-3 py-1.5 text-xs font-medium rounded-md bg-gray-700 text-white hover:bg-gray-800 disabled:opacity-50">⏸ Pause</button>
-            <button disabled={saving} onClick={() => setStatus('cleared')} className="px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50">✓ Cleared</button>
-            <button disabled={saving} onClick={() => setStatus('unreviewed')} className="px-3 py-1.5 text-xs font-medium rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50">Reset</button>
+            <Button size="sm" disabled={saving} onClick={() => setStatus('flagged')} className="bg-red-600 text-white hover:bg-red-700">🚩 Flag as fraud</Button>
+            <Button size="sm" disabled={saving} onClick={() => setStatus('paused')} variant="secondary">⏸ Pause</Button>
+            <Button size="sm" disabled={saving} onClick={() => setStatus('cleared')} className="bg-emerald-600 text-white hover:bg-emerald-700">✓ Cleared</Button>
+            <Button size="sm" disabled={saving} onClick={() => setStatus('unreviewed')} variant="outline">Reset</Button>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: 'danger' }) {
   return (
-    <div className={`rounded-lg p-3 ${tone === 'danger' ? 'bg-red-50' : 'bg-gray-50'}`}>
-      <p className="text-xs text-gray-500 mb-0.5">{label}</p>
-      <p className={`text-lg font-bold ${tone === 'danger' ? 'text-red-700' : 'text-gray-900'}`}>{value}</p>
+    <div className={cn('rounded-lg p-3', tone === 'danger' ? 'bg-red-50 dark:bg-red-500/10' : 'bg-muted')}>
+      <p className="text-muted-foreground mb-0.5 text-xs">{label}</p>
+      <p className={cn('text-lg font-bold tabular-nums', tone === 'danger' && 'text-red-700 dark:text-red-400')}>{value}</p>
     </div>
+  );
+}
+
+/** A small stat card used across the fraud summary rows. */
+function SummaryCard({ label, value, sub, tone }: {
+  label: string; value: React.ReactNode; sub?: React.ReactNode;
+  tone?: 'danger' | 'warn' | 'caution';
+}) {
+  const toneClass =
+    tone === 'danger' ? 'border-red-200 bg-red-50 dark:border-red-500/30 dark:bg-red-500/10'
+    : tone === 'warn' ? 'border-orange-200 bg-orange-50 dark:border-orange-500/30 dark:bg-orange-500/10'
+    : tone === 'caution' ? 'border-amber-200 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10'
+    : '';
+  const textClass =
+    tone === 'danger' ? 'text-red-700 dark:text-red-300'
+    : tone === 'warn' ? 'text-orange-700 dark:text-orange-300'
+    : tone === 'caution' ? 'text-amber-700 dark:text-amber-300'
+    : '';
+  return (
+    <Card className={cn('gap-1 py-4', toneClass)}>
+      <CardHeader className="px-4">
+        <CardDescription className={cn('text-xs font-medium', textClass)}>{label}</CardDescription>
+        <CardTitle className={cn('mt-1 text-2xl tabular-nums', textClass)}>{value}</CardTitle>
+      </CardHeader>
+      {sub && (
+        <CardContent className="px-4">
+          <p className={cn('text-[11px]', textClass ? `${textClass} opacity-80` : 'text-muted-foreground')}>{sub}</p>
+        </CardContent>
+      )}
+    </Card>
   );
 }
 
@@ -508,12 +563,12 @@ type SortKey = 'unpaid' | 'risk' | 'clicks' | 'pageviews' | 'signups' | 'phFts' 
 // Colour for SU→FTS rate: red if within 0.5x of Google brand baseline (likely
 // brand-bidding fingerprint), amber if 0.5-2x, gray if much lower/higher.
 function suFtsTone(rate: number | null | undefined, baseline: number | null | undefined): string {
-  if (rate == null) return 'text-gray-400';
-  if (baseline == null) return 'text-gray-700';
+  if (rate == null) return 'text-muted-foreground';
+  if (baseline == null) return 'text-foreground';
   const ratio = rate / baseline;
-  if (ratio >= 0.5 && ratio <= 2) return 'text-red-600 font-bold';
-  if (ratio >= 0.25 && ratio < 0.5) return 'text-amber-600';
-  return 'text-gray-700';
+  if (ratio >= 0.5 && ratio <= 2) return 'text-red-600 font-bold dark:text-red-400';
+  if (ratio >= 0.25 && ratio < 0.5) return 'text-amber-600 dark:text-amber-400';
+  return 'text-foreground';
 }
 type SortDir = 'asc' | 'desc';
 
@@ -523,12 +578,18 @@ function SortableTh({ sortKey, sortDir, onSort, k, label, align, title }: {
 }) {
   const active = sortKey === k;
   const indicator = active
-    ? <span className="ml-1 text-indigo-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
-    : <span className="ml-1 text-gray-300">↕</span>;
+    ? (sortDir === 'asc'
+        ? <ArrowUp className="ml-1 inline size-3 text-indigo-600 dark:text-indigo-400" />
+        : <ArrowDown className="ml-1 inline size-3 text-indigo-600 dark:text-indigo-400" />)
+    : <ChevronsUpDown className="text-muted-foreground/50 ml-1 inline size-3" />;
   return (
-    <th title={title} onClick={() => onSort(k)} className={`px-3 py-3 font-medium cursor-pointer select-none hover:text-gray-800 whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>
+    <TableHead
+      title={title}
+      onClick={() => onSort(k)}
+      className={cn('cursor-pointer whitespace-nowrap select-none', align === 'right' ? 'text-right' : 'text-left')}
+    >
       {label}{indicator}
-    </th>
+    </TableHead>
   );
 }
 
@@ -567,6 +628,16 @@ interface TtsOverall {
   googleSuToFtsRate?: number | null;
   restSuToFtsRate?: number | null;
 }
+
+const FILTER_LABELS: Record<FilterKey, string> = {
+  high: 'High',
+  medium: 'Medium',
+  unreviewed: 'Unreviewed',
+  flagged: 'Flagged',
+  tagged: '🏷 Any tag',
+  brand_bidding: '🎯 Brand bidding',
+  all: 'All',
+};
 
 export default function FraudPage() {
   const [data, setData] = useState<FraudListResponse | null>(null);
@@ -671,241 +742,235 @@ export default function FraudPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="mx-auto w-full max-w-[112rem] px-4 py-8">
       {selected && <FraudModal affiliate={selected} tts={ttsByAffId.get(selected.id)} onClose={() => setSelected(null)} onReviewUpdate={updateAffiliate} />}
 
-      <div className="max-w-[112rem] mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <div className="flex items-center gap-3 mb-1">
-              <Link href="/" className="text-sm text-indigo-500 hover:text-indigo-700">← Dashboard</Link>
-              <span className="text-gray-300">/</span>
-              <h1 className="text-2xl font-bold text-gray-900">Brand-Bidding & Fraud Audit</h1>
-            </div>
-            <p className="text-sm text-gray-400">Identify affiliates running brand-keyword ads, intercepting buyer-intent traffic, or otherwise faking referrals.</p>
+      {/* Header */}
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="mb-1 flex items-center gap-3">
+            <Button asChild variant="ghost" size="sm" className="-ml-2">
+              <Link href="/"><ArrowLeft className="size-3.5" /> Dashboard</Link>
+            </Button>
+            <span className="text-muted-foreground">/</span>
+            <h1 className="text-2xl font-bold tracking-tight">Brand-Bidding &amp; Fraud Audit</h1>
           </div>
-          <button onClick={load} disabled={loading} className="text-xs text-indigo-500 hover:text-indigo-700 disabled:opacity-40">
-            {loading ? 'Loading…' : 'Refresh'}
-          </button>
+          <p className="text-muted-foreground text-sm">Identify affiliates running brand-keyword ads, intercepting buyer-intent traffic, or otherwise faking referrals.</p>
         </div>
+        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+          <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+          {loading ? 'Loading…' : 'Refresh'}
+        </Button>
+      </div>
 
-        {/* Summary cards */}
-        {data && (
-          <>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                <p className="text-xs font-medium text-red-700">High risk</p>
-                <p className="text-2xl font-bold text-red-700 mt-1">{data.summary.highRisk}</p>
-                <p className="text-xs text-red-600/70 mt-0.5">{fmt(data.summary.unpaidAtRiskCents)} unpaid</p>
-              </div>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-                <p className="text-xs font-medium text-amber-700">Medium risk</p>
-                <p className="text-2xl font-bold text-amber-700 mt-1">{data.summary.mediumRisk}</p>
-              </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-4">
-                <p className="text-xs font-medium text-gray-500">Low risk</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">{data.summary.lowRisk}</p>
-              </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-4">
-                <p className="text-xs font-medium text-gray-500">Flagged</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">🚩 {data.summary.flagged}</p>
-              </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-4">
-                <p className="text-xs font-medium text-gray-500">Cleared</p>
-                <p className="text-2xl font-bold text-gray-900 mt-1">✓ {data.summary.cleared}</p>
-              </div>
-            </div>
-            {/* PostHog Google brand-search baselines (April-May 2026 window) */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                <p className="text-xs font-semibold text-red-700">🎯 Median sign-up to pay time (Google brand search)</p>
-                <p className={`text-2xl font-bold mt-1 ${ttsTone(ttsOverall?.googleSignupToFtsSecMedian ?? null)}`}>
-                  {ttsOverall ? fmtDuration(ttsOverall.googleSignupToFtsSecMedian) : <span className="text-gray-400 animate-pulse">…</span>}
+      {/* Summary cards */}
+      {data && (
+        <>
+          <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-5">
+            <SummaryCard tone="danger" label="High risk" value={data.summary.highRisk} sub={`${fmt(data.summary.unpaidAtRiskCents)} unpaid`} />
+            <SummaryCard tone="caution" label="Medium risk" value={data.summary.mediumRisk} />
+            <SummaryCard label="Low risk" value={data.summary.lowRisk} />
+            <SummaryCard label="Flagged" value={`🚩 ${data.summary.flagged}`} />
+            <SummaryCard label="Cleared" value={`✓ ${data.summary.cleared}`} />
+          </div>
+
+          {/* PostHog Google brand-search baselines */}
+          <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Card className="gap-1 border-red-200 bg-red-50 py-4 dark:border-red-500/30 dark:bg-red-500/10">
+              <CardHeader className="px-4">
+                <CardDescription className="text-xs font-semibold text-red-700 dark:text-red-300">🎯 Median sign-up to pay time (Google brand search)</CardDescription>
+                <CardTitle className={cn('mt-1 text-2xl tabular-nums', ttsTone(ttsOverall?.googleSignupToFtsSecMedian ?? null))}>
+                  {ttsOverall ? fmtDuration(ttsOverall.googleSignupToFtsSecMedian) : <Skeleton className="h-7 w-20" />}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-4">
+                <p className="text-xs text-red-700/70 dark:text-red-300/70">
+                  SER_BRAND baseline ({ttsOverall ? ttsOverall.googleFts.toLocaleString() : '—'} FTS / {ttsOverall ? (ttsOverall.googleSignups ?? 0).toLocaleString() : '—'} signups)
                 </p>
-                <p className="text-xs text-red-600/70 mt-0.5">SER_BRAND baseline ({ttsOverall ? ttsOverall.googleFts.toLocaleString() : '—'} FTS / {ttsOverall ? (ttsOverall.googleSignups ?? 0).toLocaleString() : '—'} signups)</p>
-              </div>
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                <p className="text-xs font-semibold text-red-700">🎯 SU→FTS rate (Google brand search)</p>
-                <p className="text-2xl font-bold mt-1 text-red-700">
-                  {ttsOverall?.googleSuToFtsRate != null ? `${(ttsOverall.googleSuToFtsRate * 100).toFixed(2)}%` : <span className="text-gray-400 animate-pulse">…</span>}
-                </p>
-                <p className="text-xs text-red-600/70 mt-0.5">Signup → first paid rate for brand intercept. Affiliates matching this are likely brand-bidding.</p>
-              </div>
-            </div>
+              </CardContent>
+            </Card>
+            <Card className="gap-1 border-red-200 bg-red-50 py-4 dark:border-red-500/30 dark:bg-red-500/10">
+              <CardHeader className="px-4">
+                <CardDescription className="text-xs font-semibold text-red-700 dark:text-red-300">🎯 SU→FTS rate (Google brand search)</CardDescription>
+                <CardTitle className="mt-1 text-2xl tabular-nums text-red-700 dark:text-red-300">
+                  {ttsOverall?.googleSuToFtsRate != null ? `${(ttsOverall.googleSuToFtsRate * 100).toFixed(2)}%` : <Skeleton className="h-7 w-20" />}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-4">
+                <p className="text-xs text-red-700/70 dark:text-red-300/70">Signup → first paid rate for brand intercept. Affiliates matching this are likely brand-bidding.</p>
+              </CardContent>
+            </Card>
+          </div>
 
-            {/* Cross-affiliate / refund / self-referral anomaly summary */}
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
-              <div className="bg-red-50 border border-red-200 rounded-xl p-3">
-                <p className="text-xs font-semibold text-red-700">Self-referral</p>
-                <p className="text-xl font-bold text-red-700 mt-1">{data.summary.affiliatesWithSelfReferral}</p>
-                <p className="text-[11px] text-red-600/70 mt-0.5">Own email = customer</p>
-              </div>
-              <div className="bg-red-50 border border-red-200 rounded-xl p-3">
-                <p className="text-xs font-semibold text-red-700">Conv &lt;60s</p>
-                <p className="text-xl font-bold text-red-700 mt-1">{data.summary.affiliatesWithSuperFastConv}</p>
-                <p className="text-[11px] text-red-600/70 mt-0.5">Super-fast conversions</p>
-              </div>
-              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
-                <p className="text-xs font-semibold text-orange-700">Duplicate names</p>
-                <p className="text-xl font-bold text-orange-700 mt-1">{data.summary.affiliatesWithDuplicateName}</p>
-                <p className="text-[11px] text-orange-600/70 mt-0.5">Same name, multiple accounts</p>
-              </div>
-              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
-                <p className="text-xs font-semibold text-orange-700">Shared customers</p>
-                <p className="text-xl font-bold text-orange-700 mt-1">{data.summary.affiliatesWithSharedCustomers}</p>
-                <p className="text-[11px] text-orange-600/70 mt-0.5">Customer under multiple affs</p>
-              </div>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                <p className="text-xs font-semibold text-amber-700">Burst pattern</p>
-                <p className="text-xl font-bold text-amber-700 mt-1">{data.summary.affiliatesWithBurstPattern}</p>
-                <p className="text-[11px] text-amber-600/70 mt-0.5">≥70% refs in single day</p>
-              </div>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                <p className="text-xs font-semibold text-amber-700">High refund</p>
-                <p className="text-xl font-bold text-amber-700 mt-1">{data.summary.affiliatesWithHighRefundRate}</p>
-                <p className="text-[11px] text-amber-600/70 mt-0.5">≥15% voided commissions</p>
-              </div>
-            </div>
-          </>
-        )}
+          {/* Cross-affiliate / refund / self-referral anomaly summary */}
+          <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-6">
+            <SummaryCard tone="danger" label="Self-referral" value={data.summary.affiliatesWithSelfReferral} sub="Own email = customer" />
+            <SummaryCard tone="danger" label="Conv <60s" value={data.summary.affiliatesWithSuperFastConv} sub="Super-fast conversions" />
+            <SummaryCard tone="warn" label="Duplicate names" value={data.summary.affiliatesWithDuplicateName} sub="Same name, multiple accounts" />
+            <SummaryCard tone="warn" label="Shared customers" value={data.summary.affiliatesWithSharedCustomers} sub="Customer under multiple affs" />
+            <SummaryCard tone="caution" label="Burst pattern" value={data.summary.affiliatesWithBurstPattern} sub="≥70% refs in single day" />
+            <SummaryCard tone="caution" label="High refund" value={data.summary.affiliatesWithHighRefundRate} sub="≥15% voided commissions" />
+          </div>
+        </>
+      )}
 
-        {/* Filters */}
-        <div className="flex flex-wrap gap-2 items-center mb-4">
-          {(['high', 'medium', 'unreviewed', 'flagged', 'tagged', 'brand_bidding', 'all'] as FilterKey[]).map((f) => (
-            <button key={f} onClick={() => setFilter(f)}
-                    className={`text-xs px-3 py-1.5 rounded-md font-medium ${filter === f ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
-              {f === 'all' ? 'All' : f === 'brand_bidding' ? '🎯 Brand bidding' : f === 'tagged' ? '🏷 Any tag' : f.charAt(0).toUpperCase() + f.slice(1)}
-            </button>
-          ))}
-          <label className="flex items-center gap-1.5 ml-2 text-xs text-gray-700 cursor-pointer">
-            <input type="checkbox" checked={hideZeroUnpaid} onChange={(e) => setHideZeroUnpaid(e.target.checked)} className="rounded" />
-            Hide $0 unpaid
-          </label>
-          <input type="text" placeholder="Search name, email, or via=token…" value={search} onChange={(e) => setSearch(e.target.value)}
-                 className="ml-auto px-3 py-1.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-indigo-400 w-64" />
+      {/* Filters */}
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <Tabs value={filter} onValueChange={(v) => setFilter(v as FilterKey)}>
+          <TabsList>
+            {(['high', 'medium', 'unreviewed', 'flagged', 'tagged', 'brand_bidding', 'all'] as FilterKey[]).map((f) => (
+              <TabsTrigger key={f} value={f}>{FILTER_LABELS[f]}</TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        <label className="flex cursor-pointer items-center gap-1.5 text-xs">
+          <input type="checkbox" checked={hideZeroUnpaid} onChange={(e) => setHideZeroUnpaid(e.target.checked)} className="accent-primary size-3.5 rounded" />
+          Hide $0 unpaid
+        </label>
+        <div className="relative ml-auto">
+          <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
+          <Input
+            type="search"
+            placeholder="Search name, email, or via=token…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-9 w-72 pl-8 text-xs"
+          />
         </div>
+      </div>
 
-        {/* Table */}
-        {loading ? (
-          <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400 text-sm">Loading affiliates…</div>
-        ) : !data || filtered.length === 0 ? (
-          <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400 text-sm">No affiliates match the current filter.</div>
-        ) : (
-          <div className="bg-white border border-gray-200 rounded-xl overflow-x-auto">
-            <table className="min-w-[1400px] w-full text-sm">
-              <thead>
-                <tr className="text-xs text-gray-500 border-b border-gray-100">
-                  <th className="text-left px-4 py-3 font-medium">Affiliate</th>
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="risk" label="Risk" align="right" title="0-100 weighted risk score" />
-                  <th title="Top 3 fraud signals that fired" className="text-left px-3 py-3 font-medium">Top signals</th>
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="clicks" label="Clicks" align="right" title="Total ?via=token clicks (Rewardful all-time)" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="pageviews" label="Pageviews (PostHog)" align="right" title="Distinct users with $pageview on a ?via=token URL (PostHog, in window)" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="signups" label="Signups (PostHog)" align="right" title="REAL signup count from PostHog (in window)" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="phFts" label="FTS (PostHog)" align="right" title="First-time-paid customers matched to this affiliate via customer_email (in window)" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="conversions" label="Conversions (Rewardful)" align="right" title="Rewardful 'converted' state count — all-time" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="instant" label="Instant %" align="right" title="% of conversions where click→paid was <5 min" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="signupToFts" label="Median Sign-up to FTS time" align="right" title="Median sign_up → first paid (PostHog, in window)" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="suFtsRate" label="Signup to FTS" align="right" title="FTS / Signups (PostHog). Compare to Google brand baseline — affiliates matching it are likely brand-bidding." />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="googleSim" label="vs Google" align="left" title="Similarity to Google brand-search baseline" />
-                  <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="unpaid" label="Unpaid" align="right" title="Unpaid commission balance" />
-                  <th title="Manual review state" className="text-right px-4 py-3 font-medium">Review</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((a) => {
-                  const tts = ttsByAffId.get(a.id);
-                  return (
-                  <tr key={a.id} className="border-b border-gray-50 hover:bg-indigo-50 transition-colors cursor-pointer" onClick={() => setSelected(a)}>
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-gray-900">{a.name}</p>
-                      <p className="text-xs text-gray-400">{a.email}</p>
-                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+      {/* Table */}
+      {loading ? (
+        <Card className="p-0">
+          <div className="space-y-2 p-4">
+            {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+          </div>
+        </Card>
+      ) : !data || filtered.length === 0 ? (
+        <Card className="p-12">
+          <p className="text-muted-foreground text-center text-sm">No affiliates match the current filter.</p>
+        </Card>
+      ) : (
+        <Card className="overflow-x-auto py-0">
+          <Table className="min-w-[1400px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="px-4">Affiliate</TableHead>
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="risk" label="Risk" align="right" title="0-100 weighted risk score" />
+                <TableHead title="Top 3 fraud signals that fired">Top signals</TableHead>
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="clicks" label="Clicks" align="right" title="Total ?via=token clicks (Rewardful all-time)" />
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="pageviews" label="Pageviews (PostHog)" align="right" title="Distinct users with $pageview on a ?via=token URL (PostHog, in window)" />
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="signups" label="Signups (PostHog)" align="right" title="REAL signup count from PostHog (in window)" />
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="phFts" label="FTS (PostHog)" align="right" title="First-time-paid customers matched to this affiliate via customer_email (in window)" />
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="conversions" label="Conversions (Rewardful)" align="right" title="Rewardful 'converted' state count — all-time" />
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="instant" label="Instant %" align="right" title="% of conversions where click→paid was <5 min" />
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="signupToFts" label="Median Sign-up to FTS time" align="right" title="Median sign_up → first paid (PostHog, in window)" />
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="suFtsRate" label="Signup to FTS" align="right" title="FTS / Signups (PostHog). Compare to Google brand baseline — affiliates matching it are likely brand-bidding." />
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="googleSim" label="vs Google" align="left" title="Similarity to Google brand-search baseline" />
+                <SortableTh sortKey={sortKey} sortDir={sortDir} onSort={handleSort} k="unpaid" label="Unpaid" align="right" title="Unpaid commission balance" />
+                <TableHead title="Manual review state" className="px-4 text-right">Review</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filtered.map((a) => {
+                const tts = ttsByAffId.get(a.id);
+                return (
+                  <TableRow key={a.id} className="cursor-pointer" onClick={() => setSelected(a)}>
+                    <TableCell className="px-4 py-3">
+                      <p className="font-medium">{a.name}</p>
+                      <p className="text-muted-foreground text-xs">{a.email}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
                         {a.linkToken && (
-                          <a
-                            href={`https://runable.com/?via=${a.linkToken}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
-                            title="Open affiliate funnel"
-                          >
-                            ?via={a.linkToken}
-                          </a>
+                          <Badge asChild variant="secondary" className="bg-indigo-50 font-mono text-[10px] text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300">
+                            <a
+                              href={`https://runable.com/?via=${a.linkToken}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              title="Open affiliate funnel"
+                            >
+                              ?via={a.linkToken}
+                            </a>
+                          </Badge>
                         )}
-                        {a.fraudTags.length > 0 && a.fraudTags.map((t) => <FraudTagPill key={t} tag={t} />)}
+                        {a.fraudTags.map((t) => <FraudTagPill key={t} tag={t} />)}
                       </div>
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-bold border ${bandColor(a.risk.band)}`}>{a.risk.score}</span>
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="flex flex-wrap gap-1 max-w-xs">
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Badge variant="outline" className={cn('font-bold tabular-nums', bandClass(a.risk.band))}>{a.risk.score}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex max-w-xs flex-wrap gap-1">
                         {a.risk.signals.slice(0, 3).map(s => (
-                          <span key={s.key} className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-100 text-gray-700"
-                                title={s.detail}>
-                            {s.label}
-                          </span>
+                          <Tooltip key={s.key}>
+                            <TooltipTrigger asChild>
+                              <Badge variant="secondary" className="font-mono text-[10px]">{s.label}</Badge>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs">{s.detail}</TooltipContent>
+                          </Tooltip>
                         ))}
-                        {a.risk.signals.length === 0 && <span className="text-xs text-gray-300">—</span>}
+                        {a.risk.signals.length === 0 && <span className="text-muted-foreground text-xs">—</span>}
                       </div>
-                    </td>
-                    <td className="px-3 py-3 text-right text-gray-700">{a.referrals.toLocaleString()}</td>
-                    <td className="px-3 py-3 text-right text-gray-700">
-                      {tts && tts.pageviews != null ? tts.pageviews.toLocaleString() : <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="px-3 py-3 text-right font-medium text-gray-700">
-                      {tts && tts.signups != null ? tts.signups.toLocaleString() : <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="px-3 py-3 text-right text-gray-700">
-                      {tts ? tts.fts.toLocaleString() : <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="px-3 py-3 text-right font-medium text-gray-900">{a.conversions.toLocaleString()}</td>
-                    <td className={`px-3 py-3 text-right font-medium ${a.risk.stats.instantConvPct > 0.4 ? 'text-red-600' : 'text-gray-400'}`}>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{a.referrals.toLocaleString()}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {tts && tts.pageviews != null ? tts.pageviews.toLocaleString() : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">
+                      {tts && tts.signups != null ? tts.signups.toLocaleString() : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {tts ? tts.fts.toLocaleString() : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">{a.conversions.toLocaleString()}</TableCell>
+                    <TableCell className={cn('text-right font-medium tabular-nums', a.risk.stats.instantConvPct > 0.4 ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground')}>
                       {a.risk.stats.instantConvPct > 0 ? `${(a.risk.stats.instantConvPct * 100).toFixed(0)}%` : '—'}
-                    </td>
-                    <td className={`px-3 py-3 text-right ${ttsTone(tts?.signupToFtsSecMedian ?? null)}`}>
-                      {tts ? fmtDuration(tts.signupToFtsSecMedian) : <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className={`px-3 py-3 text-right font-medium ${suFtsTone(tts?.signupToFtsRate, ttsOverall?.googleSuToFtsRate)}`}>
-                      {tts && tts.signupToFtsRate != null ? `${(tts.signupToFtsRate * 100).toFixed(1)}%` : <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="px-3 py-3 text-xs">
+                    </TableCell>
+                    <TableCell className={cn('text-right tabular-nums', ttsTone(tts?.signupToFtsSecMedian ?? null))}>
+                      {tts ? fmtDuration(tts.signupToFtsSecMedian) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className={cn('text-right tabular-nums', suFtsTone(tts?.signupToFtsRate, ttsOverall?.googleSuToFtsRate))}>
+                      {tts && tts.signupToFtsRate != null ? `${(tts.signupToFtsRate * 100).toFixed(1)}%` : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-xs">
                       {tts && tts.googleSimilarity !== null && tts.googleSimilarity !== undefined ? (
                         <div className="flex items-center gap-2">
-                          <div className="w-16 bg-gray-100 rounded-full h-1.5 overflow-hidden">
-                            <div className={`h-full ${similarityTone(tts.googleSimilarity)}`} style={{ width: `${Math.round(tts.googleSimilarity * 100)}%` }} />
+                          <div className="bg-muted h-1.5 w-16 overflow-hidden rounded-full">
+                            <div className={cn('h-full', similarityTone(tts.googleSimilarity))} style={{ width: `${Math.round(tts.googleSimilarity * 100)}%` }} />
                           </div>
-                          <span className="text-gray-500 tabular-nums text-[10px]">{Math.round(tts.googleSimilarity * 100)}%</span>
+                          <span className="text-muted-foreground text-[10px] tabular-nums">{Math.round(tts.googleSimilarity * 100)}%</span>
                         </div>
-                      ) : <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="px-3 py-3 text-right font-medium text-amber-600">{fmt(a.unpaidCommissionCents)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${reviewBadgeColor(a.reviewStatus)}`}>{a.reviewStatus}</span>
-                    </td>
-                  </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                      ) : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right font-medium tabular-nums text-amber-600 dark:text-amber-400">{fmt(a.unpaidCommissionCents)}</TableCell>
+                    <TableCell className="px-4 text-right">
+                      <Badge variant="secondary" className={reviewBadgeClass(a.reviewStatus)}>{a.reviewStatus}</Badge>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
 
-        {/* Methodology footnote */}
-        <div className="mt-6 text-xs text-gray-500 bg-white border border-gray-200 rounded-xl p-4">
-          <p className="font-medium text-gray-700 mb-1">How risk is scored</p>
-          <ul className="list-disc pl-5 space-y-1">
+      {/* Methodology footnote */}
+      <Card className="mt-6 gap-2 py-4">
+        <CardHeader className="px-4">
+          <CardTitle className="text-sm">How risk is scored</CardTitle>
+        </CardHeader>
+        <CardContent className="text-muted-foreground px-4 text-xs">
+          <ul className="list-disc space-y-1 pl-5">
             <li><b>gclid in referral URL</b> — visitor clicked a paid Google Ad before being attributed to the affiliate. Strongest brand-bidding signal.</li>
             <li><b>utm_medium=cpc/ppc/paid</b> — affiliate is driving paid traffic, not the organic content they were approved for.</li>
             <li><b>Google referrer concentration</b> — most/all referrals come from google.com. Real content affiliates have diversified sources.</li>
             <li><b>Instant conversions (&lt;5 min)</b> — visitor clicked the affiliate link and signed up in seconds. They were already buyer-intent.</li>
             <li><b>Abnormal conversion rate</b> — &gt;40% conv. rate is suspicious; content affiliates land at 5-20%.</li>
-            <li><b>"runable" in utm_term/utm_campaign</b> — the affiliate is literally bidding on our brand keyword.</li>
+            <li><b>&ldquo;runable&rdquo; in utm_term/utm_campaign</b> — the affiliate is literally bidding on our brand keyword.</li>
           </ul>
-          <p className="mt-2 text-gray-500">If signals fire but the data feels wrong, click the affiliate, hit the Google search shortcuts in the modal, and manually verify before flagging.</p>
-        </div>
-      </div>
+          <p className="mt-2">If signals fire but the data feels wrong, click the affiliate, hit the Google search shortcuts in the modal, and manually verify before flagging.</p>
+        </CardContent>
+      </Card>
     </div>
   );
 }

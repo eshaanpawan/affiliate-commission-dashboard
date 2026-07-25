@@ -25,17 +25,17 @@ export function fmtDuration(sec: number | null): string {
 // Tailwind colour class for a Signup→FTS / Signup→Pay duration.
 // Short = suspicious (intercepted intent). Long = healthy nurture.
 export function ttsTone(sec: number | null): string {
-  if (sec === null) return 'text-gray-400';
-  if (sec < 3600) return 'text-red-600 font-bold';        // <1 hour — high suspicion
-  if (sec < 86400) return 'text-amber-600 font-semibold'; // <1 day — moderate
-  if (sec < 7 * 86400) return 'text-gray-700';            // <1 week — normal
-  return 'text-emerald-600';                                // 1+ week — healthy
+  if (sec === null) return 'text-muted-foreground';
+  if (sec < 3600) return 'text-red-600 font-bold dark:text-red-400';        // <1 hour — high suspicion
+  if (sec < 86400) return 'text-amber-600 font-semibold dark:text-amber-400'; // <1 day — moderate
+  if (sec < 7 * 86400) return 'text-foreground';                            // <1 week — normal
+  return 'text-emerald-600 dark:text-emerald-400';                          // 1+ week — healthy
 }
 
 // Tailwind colour class for a Google-similarity bar (0..1).
 // Higher = more like brand-search intercept = more suspicious.
 export function similarityTone(sim: number | null | undefined): string {
-  if (sim === null || sim === undefined) return 'bg-gray-300';
+  if (sim === null || sim === undefined) return 'bg-muted-foreground/40';
   if (sim >= 0.7) return 'bg-red-500';
   if (sim >= 0.5) return 'bg-amber-500';
   return 'bg-emerald-500';
