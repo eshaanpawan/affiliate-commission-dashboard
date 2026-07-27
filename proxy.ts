@@ -20,9 +20,9 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Machine-to-machine: cron calls /api/sync/posthog with a bearer token.
-  // Pass it through — the route itself validates the token against CRON_SECRET.
-  if (pathname === '/api/sync/posthog' && request.headers.get('authorization')) {
+  // Machine-to-machine: cron jobs call the source sync handlers with a bearer
+  // token. Pass those requests through; each handler validates CRON_SECRET.
+  if ((pathname === '/api/sync' || pathname === '/api/sync/posthog') && request.headers.get('authorization')) {
     return NextResponse.next();
   }
 

@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/posthog",
       "schedule": "30 6 * * *"
+    },
+    {
+      "path": "/api/cron/instantly",
+      "schedule": "0 7 * * *"
     }
   ]
 }

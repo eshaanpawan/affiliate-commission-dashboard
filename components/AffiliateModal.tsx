@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { CalendarClock, CircleDollarSign, Clock3, Landmark } from 'lucide-react';
 
 import { DayOnDayChart } from '@/components/DayOnDayChart';
 import { fmtCents as fmt, pct } from '@/lib/format';
@@ -13,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
+import { Skeleton } from '@/components/ui/skeleton';
 
 interface AffiliateDetail {
   dailyReferrals: { day: string; total: number; converted: number }[];
@@ -20,7 +22,22 @@ interface AffiliateDetail {
   dailyCommissions: { day: string; usd: number }[];
 }
 
+interface AffiliateCommissionSummary {
+  dueCents: number;
+  pendingCents: number;
+  unpaidCents: number;
+  paidCents: number;
+  dueCount: number;
+  pendingCount: number;
+  paidCount: number;
+  nextDueAt: string | null;
+  fetchedAt: string;
+  source: 'rewardful' | 'local_cache';
+  accurate: boolean;
+}
+
 const affiliateDetailCache = new Map<string, Promise<AffiliateDetail>>();
+const affiliateCommissionCache = new Map<string, Promise<AffiliateCommissionSummary>>();
 
 function useAffiliateDetail(affiliateId: string, range: DashboardRange) {
   const [detail, setDetail] = useState<AffiliateDetail | null>(null);
@@ -41,6 +58,128 @@ function useAffiliateDetail(affiliateId: string, range: DashboardRange) {
     return () => { cancelled = true; };
   }, [affiliateId, range]);
   return { detail, loading };
+}
+
+function useAffiliateCommissionSummary(affiliateId: string) {
+  const [summary, setSummary] = useState<AffiliateCommissionSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    let request = affiliateCommissionCache.get(affiliateId);
+    if (!request) {
+      request = fetch(`/api/affiliates/${affiliateId}/commission-summary`, { cache: 'no-store' })
+        .then(async (response) => {
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload?.error ?? 'Commission summary failed');
+          return payload.summary as AffiliateCommissionSummary;
+        })
+        .finally(() => affiliateCommissionCache.delete(affiliateId));
+      affiliateCommissionCache.set(affiliateId, request);
+    }
+
+    request
+      .then((payload) => { if (!cancelled) setSummary(payload); })
+      .catch(() => { if (!cancelled) setSummary(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [affiliateId]);
+
+  return { summary, loading };
+}
+
+function SettlementSummary({ affiliateId }: { affiliateId: string }) {
+  const { summary, loading } = useAffiliateCommissionSummary(affiliateId);
+
+  if (loading) {
+    return <Skeleton className="h-40 w-full rounded-xl" />;
+  }
+
+  if (!summary) {
+    return (
+      <Card className="border-dashed py-4">
+        <CardContent className="text-muted-foreground text-sm">
+          Commission due-state is temporarily unavailable.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const nextDueLabel = summary.nextDueAt
+    ? new Date(summary.nextDueAt).toLocaleDateString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    })
+    : null;
+
+  const metrics = [
+    {
+      label: 'Due now',
+      value: fmt(summary.dueCents),
+      detail: `${summary.dueCount.toLocaleString()} commissions ready`,
+      icon: Landmark,
+      tone: 'border-amber-200 bg-amber-50/70 text-amber-900 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-100',
+    },
+    {
+      label: 'Not due yet',
+      value: fmt(summary.pendingCents),
+      detail: `${summary.pendingCount.toLocaleString()} commissions waiting`,
+      icon: Clock3,
+      tone: 'border-sky-200 bg-sky-50/70 text-sky-900 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-100',
+    },
+    {
+      label: 'Total unpaid',
+      value: fmt(summary.unpaidCents),
+      detail: 'Due now + not due yet',
+      icon: CircleDollarSign,
+      tone: 'border-border bg-card text-foreground',
+    },
+    {
+      label: 'Paid to date',
+      value: fmt(summary.paidCents),
+      detail: `${summary.paidCount.toLocaleString()} commissions paid`,
+      icon: CalendarClock,
+      tone: 'border-border bg-muted/40 text-foreground',
+    },
+  ];
+
+  return (
+    <Card className="gap-0 overflow-hidden py-0">
+      <CardHeader className="border-b bg-muted/30 px-4 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <CardTitle className="text-sm">Commission settlement</CardTitle>
+            <CardDescription className="mt-0.5 text-xs">
+              What can be paid now versus what is still waiting to become due.
+            </CardDescription>
+          </div>
+          <Badge variant={summary.accurate ? 'outline' : 'secondary'} className="text-[10px]">
+            {summary.accurate ? 'Live Rewardful' : 'Cached estimate'}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-2 p-3 sm:grid-cols-2 lg:grid-cols-4">
+        {metrics.map(({ label, value, detail, icon: Icon, tone }) => (
+          <div key={label} className={`rounded-lg border p-3 ${tone}`}>
+            <div className="mb-2 flex items-center gap-1.5 text-xs font-medium">
+              <Icon className="size-3.5" /> {label}
+            </div>
+            <p className="text-lg font-bold tabular-nums">{value}</p>
+            <p className="mt-0.5 text-[10px] opacity-70">{detail}</p>
+          </div>
+        ))}
+      </CardContent>
+      <div className="border-t px-4 py-2 text-[11px] text-muted-foreground">
+        {nextDueLabel
+          ? `Next pending commission becomes due on ${nextDueLabel}.`
+          : summary.pendingCents > 0
+            ? 'Next due date is unavailable in the cached data.'
+            : 'No commission is waiting for a future due date.'}
+      </div>
+    </Card>
+  );
 }
 
 function AffiliateDetailChart({ affiliateId, title, dataKey, bars, valuePrefix }: {
@@ -94,6 +233,8 @@ export function AffiliateModal({ affiliate, ftsCountries, ftsTotal, onClose }: {
             </div>
           </div>
         </div>
+
+        <SettlementSummary affiliateId={affiliate.id} />
 
         <div className="space-y-4">
             <AffiliateDetailChart

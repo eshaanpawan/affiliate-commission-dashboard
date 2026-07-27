@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
 import { extractTrafficFields } from '@/lib/fraud-detection';
 import { isAuthed } from '@/lib/auth';
+import { queueAffiliateOutreachContacts } from '@/lib/outreach';
 
 const sql = neon(process.env.NEON_DATABASE_URL!);
 const API_SECRET = process.env.REWARDFUL_API_SECRET!;
@@ -11,18 +12,73 @@ export const maxDuration = 300;
 
 let nextRewardfulRequestAt = 0;
 
+interface RewardfulPage {
+  data: Record<string, unknown>[];
+  pagination: {
+    current_page: number;
+    total_pages: number;
+    total_count?: number;
+  };
+}
+
+function retryDelayMs(response: Response, attempt: number): number {
+  const retryAfter = response.headers.get('retry-after');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(20_000, Math.max(1_000, seconds * 1_000));
+    const retryAt = Date.parse(retryAfter);
+    if (!Number.isNaN(retryAt)) return Math.min(20_000, Math.max(1_000, retryAt - Date.now()));
+  }
+  return Math.min(12_000, 1_000 * 2 ** attempt);
+}
+
+async function parseRewardfulPage(response: Response, path: string): Promise<RewardfulPage> {
+  const payload = await response.json() as Partial<RewardfulPage>;
+  const totalPages = Number(payload.pagination?.total_pages);
+  const currentPage = Number(payload.pagination?.current_page);
+  if (!Array.isArray(payload.data) || !Number.isInteger(totalPages) || totalPages < 0
+    || !Number.isInteger(currentPage) || currentPage < 1) {
+    throw new Error(`Rewardful ${path} returned an invalid pagination envelope`);
+  }
+  return payload as RewardfulPage;
+}
+
 async function rewardfulFetch(url: string): Promise<Response> {
   const waitMs = Math.max(0, nextRewardfulRequestAt - Date.now());
   if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
   nextRewardfulRequestAt = Date.now() + 700;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await fetch(url, { headers: { Authorization: authHeader }, cache: 'no-store' });
-    if (response.status !== 429) return response;
-    const retryAfter = Number(response.headers.get('retry-after') ?? '2');
-    await new Promise((resolve) => setTimeout(resolve, Math.max(1, retryAfter) * 1000));
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: authHeader },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (![429, 502, 503, 504].includes(response.status)) return response;
+      if (attempt === 4) break;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(response, attempt)));
+    } catch (error) {
+      if (attempt === 4) {
+        throw new Error(
+          error instanceof Error && error.name === 'TimeoutError'
+            ? 'Rewardful request timed out after five retries'
+            : 'Rewardful could not be reached after five retries',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(12_000, 1_000 * 2 ** attempt)));
+    }
   }
-  throw new Error('Rewardful rate limit did not clear after retries');
+  throw new Error('Rewardful remained unavailable after five retries');
+}
+
+function withoutUpdatedSince(path: string): string {
+  const queryIndex = path.indexOf('?');
+  const pathname = queryIndex === -1 ? path : path.slice(0, queryIndex);
+  const params = new URLSearchParams(queryIndex === -1 ? '' : path.slice(queryIndex + 1));
+  params.delete('updated_since');
+  const query = params.toString();
+  return query ? `${pathname}?${query}` : pathname;
 }
 
 async function fetchRecent(path: string, cutoff: Date): Promise<Record<string, unknown>[]> {
@@ -32,8 +88,13 @@ async function fetchRecent(path: string, cutoff: Date): Promise<Record<string, u
   while (page <= 5_000) {
     const sep = path.includes('?') ? '&' : '?';
     const res = await rewardfulFetch(`${BASE_URL}${path}${sep}page=${page}&limit=100`);
-    if (!res.ok) throw new Error(`Rewardful ${path} failed (${res.status})`);
-    const json = await res.json() as { data: Record<string, unknown>[]; pagination: { total_pages: number } };
+    if (!res.ok) {
+      if (serverFiltersUpdates && page === 1 && res.status >= 500) {
+        return fetchRecent(withoutUpdatedSince(path), cutoff);
+      }
+      throw new Error(`Rewardful ${path} failed (${res.status})`);
+    }
+    const json = await parseRewardfulPage(res, path);
     const recent = serverFiltersUpdates
       ? json.data
       : json.data.filter((r) => new Date(r.created_at as string) >= cutoff);
@@ -49,13 +110,31 @@ async function fetchRecent(path: string, cutoff: Date): Promise<Record<string, u
 async function fetchAllAffiliates(): Promise<Record<string, unknown>[]> {
   const results: Record<string, unknown>[] = [];
   let page = 1;
+  let expectedTotal: number | null = null;
   while (true) {
-    const res = await rewardfulFetch(`${BASE_URL}/affiliates?page=${page}&limit=100&expand[]=links&expand[]=commission_stats`);
+    const path = `/affiliates?page=${page}&limit=100&expand[]=links&expand[]=commission_stats`;
+    const res = await rewardfulFetch(`${BASE_URL}${path}`);
     if (!res.ok) throw new Error(`Rewardful affiliates failed (${res.status})`);
-    const json = await res.json() as { data: Record<string, unknown>[]; pagination: { total_pages: number } };
+    const json = await parseRewardfulPage(res, path);
+    if (json.pagination.current_page !== page) {
+      throw new Error(`Rewardful affiliates returned page ${json.pagination.current_page} while page ${page} was requested`);
+    }
+    if (page === 1 && Number.isInteger(json.pagination.total_count)) {
+      expectedTotal = Number(json.pagination.total_count);
+    }
     results.push(...json.data);
     if (page >= json.pagination.total_pages) break;
     page++;
+  }
+  const ids = results.map((affiliate) => affiliate.id).filter((id): id is string => typeof id === 'string' && id.length > 0);
+  if (results.length === 0) {
+    throw new Error('Rewardful returned an empty affiliate roster; sync stopped to preserve local data');
+  }
+  if (ids.length !== results.length || new Set(ids).size !== ids.length) {
+    throw new Error('Rewardful affiliate roster contained missing or duplicate identifiers');
+  }
+  if (expectedTotal !== null && results.length !== expectedTotal) {
+    throw new Error(`Rewardful affiliate roster was incomplete (${results.length} of ${expectedTotal})`);
   }
   return results;
 }
@@ -290,6 +369,8 @@ export async function POST(req: Request) {
       }
     }
 
+    const outreachQueue = await queueAffiliateOutreachContacts();
+
     return NextResponse.json({
       message: `Updated ${affiliates.length.toLocaleString()} affiliates and ${referrals.length.toLocaleString()} changed referrals.`,
       synced: {
@@ -301,6 +382,7 @@ export async function POST(req: Request) {
         commissionStatsUpdated: affiliates.filter((affiliate) => affiliate.commission_stats).length,
       },
       syncedAt: new Date().toISOString(),
+      outreachQueue,
     });
   } catch (err) {
     console.error('Sync error:', err);

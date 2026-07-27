@@ -16,9 +16,19 @@ async function migrate() {
       event_type TEXT NOT NULL,
       payload JSONB NOT NULL,
       received_at TIMESTAMPTZ DEFAULT NOW(),
-      processed BOOLEAN DEFAULT TRUE
+      processed BOOLEAN DEFAULT FALSE,
+      processing_started_at TIMESTAMPTZ,
+      processed_at TIMESTAMPTZ,
+      processing_error TEXT,
+      attempt_count INT NOT NULL DEFAULT 0
     )
   `;
+
+  await sql`ALTER TABLE webhook_events ALTER COLUMN processed SET DEFAULT FALSE`;
+  await sql`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS processing_error TEXT`;
+  await sql`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS attempt_count INT NOT NULL DEFAULT 0`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS affiliates (
@@ -143,6 +153,14 @@ async function migrate() {
       signups_with_gclid INT DEFAULT 0,
       signups_with_gbraid INT DEFAULT 0,
       signups_with_gad_campaignid INT DEFAULT 0,
+      signups_with_google INT DEFAULT 0,
+      signups_with_meta INT DEFAULT 0,
+      signups_with_microsoft INT DEFAULT 0,
+      signups_with_tiktok INT DEFAULT 0,
+      signups_with_linkedin INT DEFAULT 0,
+      signups_with_reddit INT DEFAULT 0,
+      signups_with_x INT DEFAULT 0,
+      signups_with_apple INT DEFAULT 0,
       signups_with_any_ad_param INT DEFAULT 0,
       fts INT DEFAULT 0,
       pageviews INT DEFAULT 0,
@@ -152,6 +170,14 @@ async function migrate() {
       PRIMARY KEY (via_token, day)
     )
   `;
+  await sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_google INT DEFAULT 0`;
+  await sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_meta INT DEFAULT 0`;
+  await sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_microsoft INT DEFAULT 0`;
+  await sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_tiktok INT DEFAULT 0`;
+  await sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_linkedin INT DEFAULT 0`;
+  await sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_reddit INT DEFAULT 0`;
+  await sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_x INT DEFAULT 0`;
+  await sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_apple INT DEFAULT 0`;
   await sql`CREATE INDEX IF NOT EXISTS idx_affiliate_traffic_day ON affiliate_traffic (day)`;
 
   // ---- Enforcement (staged bans, applied to Rewardful only via explicit bulk action) ----
@@ -188,6 +214,49 @@ async function migrate() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `;
+
+  // ---- Rewardful -> Instantly outreach reconciliation ----
+  await sql`
+    CREATE TABLE IF NOT EXISTS outreach_contacts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      affiliate_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      instantly_lead_id TEXT,
+      segment TEXT NOT NULL DEFAULT 'onboarding',
+      source_updated_at TIMESTAMPTZ,
+      payload_hash TEXT,
+      sync_status TEXT NOT NULL DEFAULT 'pending',
+      sync_error TEXT,
+      sync_attempts INT NOT NULL DEFAULT 0,
+      next_attempt_at TIMESTAMPTZ,
+      last_synced_at TIMESTAMPTZ,
+      suppressed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (affiliate_id, campaign_id)
+    )
+  `;
+  await sql`ALTER TABLE outreach_contacts ADD COLUMN IF NOT EXISTS sync_attempts INT NOT NULL DEFAULT 0`;
+  await sql`ALTER TABLE outreach_contacts ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_outreach_contacts_status ON outreach_contacts (sync_status)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_outreach_contacts_email ON outreach_contacts (email)`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_outreach_contacts_campaign_email ON outreach_contacts (campaign_id, LOWER(email))`;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS outreach_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      affiliate_id TEXT,
+      campaign_id TEXT,
+      event_type TEXT NOT NULL,
+      external_id TEXT,
+      status TEXT NOT NULL DEFAULT 'ok',
+      payload JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_outreach_events_campaign ON outreach_events (campaign_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_outreach_events_created_at ON outreach_events (created_at)`;
 
   // ---- Data repair: commissions.affiliate_id is NULL on legacy rows; sales has it ----
   await sql`

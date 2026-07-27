@@ -1,11 +1,12 @@
 import sql from './db';
 import { extractTrafficFields } from './fraud-detection';
+import { queueAffiliateOutreachContacts, suppressAffiliateOutreachContacts } from './outreach';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function processWebhookEvent(eventType: string, object: any) {
   switch (true) {
     case eventType.startsWith('affiliate.'):
-      await upsertAffiliate(object);
+      await upsertAffiliate(eventType, object);
       break;
     case eventType.startsWith('referral.'):
       await upsertReferral(eventType, object);
@@ -23,8 +24,9 @@ export async function processWebhookEvent(eventType: string, object: any) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function upsertAffiliate(obj: any) {
+async function upsertAffiliate(eventType: string, obj: any) {
   const usd = obj.commission_stats?.currencies?.USD;
+  const deleted = eventType === 'affiliate.deleted';
   await sql`
     INSERT INTO affiliates (
       rewardful_id, first_name, last_name, email, status, created_at, confirmed_at, updated_at,
@@ -35,7 +37,7 @@ async function upsertAffiliate(obj: any) {
       ${obj.first_name ?? null},
       ${obj.last_name ?? null},
       ${obj.email ?? null},
-      ${obj.state ?? 'active'},
+      ${deleted ? 'deleted' : (obj.state ?? 'active')},
       ${obj.created_at ?? new Date().toISOString()},
       ${obj.confirmed_at ?? null},
       ${new Date().toISOString()},
@@ -56,6 +58,13 @@ async function upsertAffiliate(obj: any) {
       paid_commission_cents = CASE WHEN ${obj.commission_stats != null} THEN EXCLUDED.paid_commission_cents ELSE affiliates.paid_commission_cents END,
       gross_revenue_cents = CASE WHEN ${obj.commission_stats != null} THEN EXCLUDED.gross_revenue_cents ELSE affiliates.gross_revenue_cents END
   `;
+  if (deleted) {
+    await suppressAffiliateOutreachContacts(obj.id);
+  } else {
+    // Queue a durable contact reconciliation only. The worker imports it into the
+    // configured draft/paused campaign; this webhook never sends or activates mail.
+    await queueAffiliateOutreachContacts(obj.id);
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -100,6 +109,15 @@ async function upsertReferral(eventType: string, obj: any) {
       customer_email = COALESCE(EXCLUDED.customer_email, referrals.customer_email),
       customer_id = COALESCE(EXCLUDED.customer_id, referrals.customer_id),
       visitor_id = COALESCE(EXCLUDED.visitor_id, referrals.visitor_id),
+      referrer = COALESCE(EXCLUDED.referrer, referrals.referrer),
+      landing_page = COALESCE(EXCLUDED.landing_page, referrals.landing_page),
+      utm_source = COALESCE(EXCLUDED.utm_source, referrals.utm_source),
+      utm_medium = COALESCE(EXCLUDED.utm_medium, referrals.utm_medium),
+      utm_campaign = COALESCE(EXCLUDED.utm_campaign, referrals.utm_campaign),
+      utm_term = COALESCE(EXCLUDED.utm_term, referrals.utm_term),
+      utm_content = COALESCE(EXCLUDED.utm_content, referrals.utm_content),
+      gclid = COALESCE(EXCLUDED.gclid, referrals.gclid),
+      fbclid = COALESCE(EXCLUDED.fbclid, referrals.fbclid),
       raw_payload = EXCLUDED.raw_payload
   `;
 }

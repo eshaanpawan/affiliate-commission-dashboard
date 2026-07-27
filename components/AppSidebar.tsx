@@ -1,5 +1,6 @@
 'use client';
 
+import * as React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -8,6 +9,7 @@ import {
   CalendarRange,
   ChartNoAxesCombined,
   CircleCheckBig,
+  CircleAlert,
   Filter,
   Gauge,
   Globe,
@@ -17,6 +19,7 @@ import {
   Sparkles,
   Trophy,
   Users,
+  Mail,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -55,6 +58,7 @@ const NAV_GROUPS = [
       { href: '/countries', label: 'Countries', icon: Globe },
       { href: '/funnel', label: 'Funnel vs Google', icon: Filter },
       { href: '/growth', label: 'Growth workspace', icon: Sparkles },
+      { href: '/mail', label: 'Mail center', icon: Mail },
     ],
   },
   {
@@ -72,6 +76,21 @@ export function AppSidebar({ badges }: { badges?: { highRisk?: number; heldCount
   const router = useRouter();
   const { range } = useDashboardRange();
   const { state: sidebarState } = useSidebar();
+  const [health, setHealth] = React.useState<{
+    rewardful?: { state: string; affiliateRows: number; lastSyncedAt: string | null };
+    posthog?: { state: string };
+    instantly?: { state: string };
+    badges?: { highRisk?: number; heldCount?: number };
+  } | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    fetch('/api/source-health', { cache: 'no-store' })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => { if (active && payload) setHealth(payload); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [pathname]);
 
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' });
@@ -122,7 +141,8 @@ export function AppSidebar({ badges }: { badges?: { highRisk?: number; heldCount
               <SidebarMenu className="gap-1">
                 {group.items.map((item) => {
                   const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
-                  const badge = 'badgeKey' in item && item.badgeKey ? badges?.[item.badgeKey] : undefined;
+                  const effectiveBadges = badges ?? health?.badges;
+                  const badge = 'badgeKey' in item && item.badgeKey ? effectiveBadges?.[item.badgeKey] : undefined;
                   return (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton
@@ -161,13 +181,28 @@ export function AppSidebar({ badges }: { badges?: { highRisk?: number; heldCount
             Source health
           </p>
           <div className="mt-2 grid gap-1.5 text-[11px] text-muted-foreground">
-            <span className="flex items-center gap-1.5">
-              <CircleCheckBig className="size-3 text-emerald-600 dark:text-emerald-400" />
-              Rewardful connected
+            <span
+              className="flex items-center gap-1.5"
+              title={health?.rewardful?.affiliateRows
+                ? `${health.rewardful.affiliateRows.toLocaleString()} current affiliates synchronized`
+                : undefined}
+            >
+              {health?.rewardful?.state === 'healthy'
+                ? <CircleCheckBig className="size-3 text-emerald-600 dark:text-emerald-400" />
+                : <CircleAlert className="size-3 text-amber-600 dark:text-amber-400" />}
+              Rewardful {health?.rewardful?.state ?? 'checking'}
             </span>
             <span className="flex items-center gap-1.5">
-              <CircleCheckBig className="size-3 text-emerald-600 dark:text-emerald-400" />
-              PostHog materialized
+              {health?.posthog?.state === 'healthy'
+                ? <CircleCheckBig className="size-3 text-emerald-600 dark:text-emerald-400" />
+                : <CircleAlert className="size-3 text-amber-600 dark:text-amber-400" />}
+              PostHog {health?.posthog?.state ?? 'checking'}
+            </span>
+            <span className="flex items-center gap-1.5">
+              {health?.instantly?.state === 'configured'
+                ? <CircleCheckBig className="size-3 text-emerald-600 dark:text-emerald-400" />
+                : <CircleAlert className="size-3 text-amber-600 dark:text-amber-400" />}
+              Instantly {health?.instantly?.state ?? 'checking'}
             </span>
           </div>
         </div>

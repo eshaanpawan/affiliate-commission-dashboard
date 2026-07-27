@@ -51,6 +51,14 @@ export async function GET(req: Request) {
       SELECT t.via_token,
         SUM(t.signups)::int AS signups,
         SUM(t.signups_with_any_ad_param)::int AS ad_signups,
+        SUM(t.signups_with_google)::int AS google_signups,
+        SUM(t.signups_with_meta)::int AS meta_signups,
+        SUM(t.signups_with_microsoft)::int AS microsoft_signups,
+        SUM(t.signups_with_tiktok)::int AS tiktok_signups,
+        SUM(t.signups_with_linkedin)::int AS linkedin_signups,
+        SUM(t.signups_with_reddit)::int AS reddit_signups,
+        SUM(t.signups_with_x)::int AS x_signups,
+        SUM(t.signups_with_apple)::int AS apple_signups,
         SUM(t.fts)::int AS fts,
         SUM(t.pageviews)::int AS pageviews,
         COALESCE((
@@ -135,6 +143,16 @@ export async function GET(req: Request) {
       viaToken: String(r.via_token),
       signups: Number(r.signups),
       signupsWithAnyAdParam: Number(r.ad_signups),
+      networkSignups: {
+        google: Number(r.google_signups),
+        meta: Number(r.meta_signups),
+        microsoft: Number(r.microsoft_signups),
+        tiktok: Number(r.tiktok_signups),
+        linkedin: Number(r.linkedin_signups),
+        reddit: Number(r.reddit_signups),
+        x: Number(r.x_signups),
+        apple: Number(r.apple_signups),
+      },
       fts: Number(r.fts),
       pageviews: Number(r.pageviews),
       campaignIds: (r.campaign_ids as string[]) ?? [],
@@ -229,8 +247,7 @@ export async function GET(req: Request) {
       isOurs: ourCampaignSet.has(cid),
       affiliates: [...owners].map(id => ({ id, name: affiliateNameById.get(id) ?? id })),
     }))
-    .sort((a, b) => Number(b.isOurs) - Number(a.isOurs) || b.affiliates.length - a.affiliates.length)
-    .slice(0, 100);
+    .sort((a, b) => Number(b.isOurs) - Number(a.isOurs) || b.affiliates.length - a.affiliates.length);
 
   const high = affiliates.filter(a => a.risk.band === 'high');
   const totals = [...trafficByToken.values()].reduce(
@@ -239,9 +256,18 @@ export async function GET(req: Request) {
       acc.adSignups += t.signupsWithAnyAdParam;
       acc.fts += t.fts;
       acc.pageviews += t.pageviews;
+      for (const key of Object.keys(acc.networks) as (keyof typeof acc.networks)[]) {
+        acc.networks[key] += t.networkSignups[key];
+      }
       return acc;
     },
-    { signups: 0, adSignups: 0, fts: 0, pageviews: 0 });
+    {
+      signups: 0,
+      adSignups: 0,
+      fts: 0,
+      pageviews: 0,
+      networks: { google: 0, meta: 0, microsoft: 0, tiktok: 0, linkedin: 0, reddit: 0, x: 0, apple: 0 },
+    });
 
   return NextResponse.json({
     window: { days },
@@ -251,6 +277,7 @@ export async function GET(req: Request) {
       adPct: totals.signups > 0 ? totals.adSignups / totals.signups : 0,
       totalFts: totals.fts,
       totalPageviews: totals.pageviews,
+      networkSignups: totals.networks,
       affiliatesRunningAds: affiliates.filter(a =>
         a.risk.signals.some(s => s.key === 'paid_ads_traffic')).length,
       campaignHijackers: affiliates.filter(a => a.risk.stats.ourCampaignIds.length > 0).length,

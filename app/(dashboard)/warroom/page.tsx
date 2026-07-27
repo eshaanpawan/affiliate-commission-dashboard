@@ -76,6 +76,7 @@ interface WarAffiliate {
       signups: number; adSignups: number; adPct: number; fts: number; pageviews: number;
       organicSignups: number; campaignIds: string[]; ourCampaignIds: string[];
       sharedCampaignIds: string[]; tokens: string[];
+      networks: Record<AdNetworkKey, number>;
     };
   };
 }
@@ -86,11 +87,25 @@ interface WarRoomData {
     affiliatesRunningAds: number; campaignHijackers: number; ringMembers: number;
     highRisk: number; mediumRisk: number; unpaidAtRiskCents: number; unpaidTotalCents: number;
     proposedBans: number; banned: number;
+    networkSignups: Record<AdNetworkKey, number>;
   };
   daily: { day: string; signups: number; adSignups: number; organicSignups: number; fts: number; pageviews: number }[];
   affiliates: WarAffiliate[];
   campaignOverlap: { campaignId: string; isOurs: boolean; affiliates: { id: string; name: string }[] }[];
 }
+
+type AdNetworkKey = 'google' | 'meta' | 'microsoft' | 'tiktok' | 'linkedin' | 'reddit' | 'x' | 'apple';
+
+const AD_NETWORKS: { key: AdNetworkKey; label: string; evidence: string }[] = [
+  { key: 'google', label: 'Google Ads', evidence: 'gclid · gbraid · campaign ID' },
+  { key: 'meta', label: 'Meta', evidence: 'fbclid' },
+  { key: 'microsoft', label: 'Microsoft Ads', evidence: 'msclkid' },
+  { key: 'tiktok', label: 'TikTok', evidence: 'ttclid' },
+  { key: 'linkedin', label: 'LinkedIn', evidence: 'li_fat_id' },
+  { key: 'reddit', label: 'Reddit', evidence: 'rdt_cid' },
+  { key: 'x', label: 'X Ads', evidence: 'twclid' },
+  { key: 'apple', label: 'Apple Search Ads', evidence: 'pt + ct · apple source' },
+];
 
 /* ---------- helpers ---------- */
 
@@ -285,6 +300,50 @@ function Kpi({ icon: Icon, label, value, sub, tone, onClick, active }: {
       ) : (
         <div className="py-4">{content}</div>
       )}
+    </Card>
+  );
+}
+
+function NetworkEvidenceCard({ counts }: { counts: Record<AdNetworkKey, number> }) {
+  const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
+  const max = Math.max(1, ...Object.values(counts));
+
+  return (
+    <Card className="gap-0 overflow-hidden py-0">
+      <CardHeader className="border-b py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Network className="size-4" />
+              Paid-network evidence
+            </CardTitle>
+            <CardDescription className="mt-1 max-w-3xl text-xs">
+              Distinct signups carrying each network&apos;s click identifier on the first-touch URL. Counts can overlap
+              when a redirect preserves more than one identifier; they prove attributed traffic, not who bought the ad.
+            </CardDescription>
+          </div>
+          <Badge variant="outline" className="tabular-nums">{fmtInt(total)} network observations</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-2 p-4 sm:grid-cols-2 xl:grid-cols-4">
+        {AD_NETWORKS.map((network) => (
+          <div key={network.key} className="rounded-xl border bg-muted/20 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold">{network.label}</p>
+                <p className="truncate text-[10px] text-muted-foreground">{network.evidence}</p>
+              </div>
+              <p className="text-lg font-semibold tabular-nums">{fmtInt(counts[network.key])}</p>
+            </div>
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-[width]"
+                style={{ width: `${counts[network.key] === 0 ? 0 : Math.max(3, (counts[network.key] / max) * 100)}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </CardContent>
     </Card>
   );
 }
@@ -745,6 +804,8 @@ function CampaignOverlapSection({
 }
 
 function CountryIntelligenceSection({ affiliates }: { affiliates: WarAffiliate[] }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 8;
   const countryRows = useMemo(() => {
     const countries = new Map<string, {
       code: string;
@@ -774,6 +835,9 @@ function CountryIntelligenceSection({ affiliates }: { affiliates: WarAffiliate[]
   const totalAttributed = countryRows.reduce((sum, country) => sum + country.conversions, 0);
   const affiliatesWithMarket = affiliates.filter((affiliate) => affiliate.countries.length > 0).length;
   const maxConversions = Math.max(1, ...countryRows.map((country) => country.conversions));
+  const totalPages = Math.max(1, Math.ceil(countryRows.length / pageSize));
+  const activePage = Math.min(page, totalPages);
+  const visibleCountries = countryRows.slice((activePage - 1) * pageSize, activePage * pageSize);
 
   return (
     <Card className="gap-0 overflow-hidden py-0">
@@ -807,7 +871,7 @@ function CountryIntelligenceSection({ affiliates }: { affiliates: WarAffiliate[]
               <h2 className="text-sm font-semibold">Top conversion markets</h2>
               <p className="text-[11px] text-muted-foreground">Ranked by converted Rewardful referrals in this window.</p>
             </div>
-            <Badge variant="outline">Top {Math.min(8, countryRows.length)}</Badge>
+            <Badge variant="outline">Page {activePage} of {totalPages}</Badge>
           </div>
           {countryRows.length === 0 ? (
             <div className="rounded-xl border border-dashed p-8 text-center">
@@ -816,7 +880,7 @@ function CountryIntelligenceSection({ affiliates }: { affiliates: WarAffiliate[]
             </div>
           ) : (
             <div className="grid gap-2">
-              {countryRows.slice(0, 8).map((country) => (
+              {visibleCountries.map((country) => (
                 <div key={country.code} className="grid grid-cols-[minmax(110px,180px)_1fr_auto] items-center gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-xs font-medium">{country.name}</p>
@@ -838,6 +902,14 @@ function CountryIntelligenceSection({ affiliates }: { affiliates: WarAffiliate[]
               ))}
             </div>
           )}
+          <PaginationControls
+            page={activePage}
+            totalPages={totalPages}
+            totalItems={countryRows.length}
+            pageSize={pageSize}
+            itemLabel="markets"
+            onPageChange={setPage}
+          />
         </div>
       </CardContent>
     </Card>
@@ -851,6 +923,8 @@ function KeywordEvidenceSection({
   affiliates: WarAffiliate[];
   onOpenAffiliate: (id: string) => void;
 }) {
+  const [page, setPage] = useState(1);
+  const pageSize = 8;
   const evidence = useMemo(() => affiliates
     .filter((affiliate) => affiliate.observedAdTerms.length > 0)
     .map((affiliate) => ({
@@ -861,6 +935,9 @@ function KeywordEvidenceSection({
     .sort((a, b) => b.brandMatches.length - a.brandMatches.length || b.observations - a.observations),
   [affiliates]);
   const brandMatches = evidence.reduce((sum, item) => sum + item.brandMatches.length, 0);
+  const totalPages = Math.max(1, Math.ceil(evidence.length / pageSize));
+  const activePage = Math.min(page, totalPages);
+  const visibleEvidence = evidence.slice((activePage - 1) * pageSize, activePage * pageSize);
 
   return (
     <Card className="gap-0 overflow-hidden py-0">
@@ -921,7 +998,7 @@ function KeywordEvidenceSection({
             </div>
           ) : (
             <div className="grid gap-2 sm:grid-cols-2">
-              {evidence.slice(0, 8).map(({ affiliate, observations, brandMatches: matches }) => (
+              {visibleEvidence.map(({ affiliate, observations, brandMatches: matches }) => (
                 <button
                   key={affiliate.id}
                   type="button"
@@ -947,6 +1024,14 @@ function KeywordEvidenceSection({
               ))}
             </div>
           )}
+          <PaginationControls
+            page={activePage}
+            totalPages={totalPages}
+            totalItems={evidence.length}
+            pageSize={pageSize}
+            itemLabel="affiliate evidence cases"
+            onPageChange={setPage}
+          />
         </div>
       </CardContent>
     </Card>
@@ -1118,6 +1203,8 @@ export default function WarRoomPage() {
           sub={`affiliate tokens seen with our campaign IDs · ${summary.ringMembers} in shared-ID clusters`}
           onClick={() => selectFilter('hijack')} active={filter === 'hijack'} />
       </div>
+
+      <NetworkEvidenceCard counts={summary.networkSignups} />
 
       {/* Hero chart + funnel */}
       <div className="grid gap-4 xl:grid-cols-3">

@@ -30,8 +30,15 @@ export async function POST(req: NextRequest) {
     CREATE TABLE IF NOT EXISTS webhook_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       event_id TEXT UNIQUE, event_type TEXT NOT NULL, payload JSONB NOT NULL,
-      received_at TIMESTAMPTZ DEFAULT NOW(), processed BOOLEAN DEFAULT TRUE
+      received_at TIMESTAMPTZ DEFAULT NOW(), processed BOOLEAN DEFAULT FALSE,
+      processing_started_at TIMESTAMPTZ, processed_at TIMESTAMPTZ,
+      processing_error TEXT, attempt_count INT NOT NULL DEFAULT 0
     )`);
+  await run('webhook_events processed default', () => sql`ALTER TABLE webhook_events ALTER COLUMN processed SET DEFAULT FALSE`);
+  await run('webhook_events processing_started_at', () => sql`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ`);
+  await run('webhook_events processed_at', () => sql`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ`);
+  await run('webhook_events processing_error', () => sql`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS processing_error TEXT`);
+  await run('webhook_events attempt_count', () => sql`ALTER TABLE webhook_events ADD COLUMN IF NOT EXISTS attempt_count INT NOT NULL DEFAULT 0`);
   await run('affiliates table', () => sql`
     CREATE TABLE IF NOT EXISTS affiliates (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -119,6 +126,14 @@ export async function POST(req: NextRequest) {
       signups_with_gclid INT DEFAULT 0,
       signups_with_gbraid INT DEFAULT 0,
       signups_with_gad_campaignid INT DEFAULT 0,
+      signups_with_google INT DEFAULT 0,
+      signups_with_meta INT DEFAULT 0,
+      signups_with_microsoft INT DEFAULT 0,
+      signups_with_tiktok INT DEFAULT 0,
+      signups_with_linkedin INT DEFAULT 0,
+      signups_with_reddit INT DEFAULT 0,
+      signups_with_x INT DEFAULT 0,
+      signups_with_apple INT DEFAULT 0,
       signups_with_any_ad_param INT DEFAULT 0,
       fts INT DEFAULT 0,
       pageviews INT DEFAULT 0,
@@ -127,6 +142,14 @@ export async function POST(req: NextRequest) {
       synced_at TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY (via_token, day)
     )`);
+  await run('affiliate_traffic.signups_with_google', () => sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_google INT DEFAULT 0`);
+  await run('affiliate_traffic.signups_with_meta', () => sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_meta INT DEFAULT 0`);
+  await run('affiliate_traffic.signups_with_microsoft', () => sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_microsoft INT DEFAULT 0`);
+  await run('affiliate_traffic.signups_with_tiktok', () => sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_tiktok INT DEFAULT 0`);
+  await run('affiliate_traffic.signups_with_linkedin', () => sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_linkedin INT DEFAULT 0`);
+  await run('affiliate_traffic.signups_with_reddit', () => sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_reddit INT DEFAULT 0`);
+  await run('affiliate_traffic.signups_with_x', () => sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_x INT DEFAULT 0`);
+  await run('affiliate_traffic.signups_with_apple', () => sql`ALTER TABLE affiliate_traffic ADD COLUMN IF NOT EXISTS signups_with_apple INT DEFAULT 0`);
   await run('idx_affiliate_traffic_day', () => sql`CREATE INDEX IF NOT EXISTS idx_affiliate_traffic_day ON affiliate_traffic (day)`);
 
   // Enforcement (staged bans, applied to Rewardful only via explicit bulk action)
@@ -161,6 +184,47 @@ export async function POST(req: NextRequest) {
       decided_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`);
+
+  // Rewardful -> Instantly outreach reconciliation
+  await run('outreach_contacts table', () => sql`
+    CREATE TABLE IF NOT EXISTS outreach_contacts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      affiliate_id TEXT NOT NULL,
+      campaign_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      instantly_lead_id TEXT,
+      segment TEXT NOT NULL DEFAULT 'onboarding',
+      source_updated_at TIMESTAMPTZ,
+      payload_hash TEXT,
+      sync_status TEXT NOT NULL DEFAULT 'pending',
+      sync_error TEXT,
+      sync_attempts INT NOT NULL DEFAULT 0,
+      next_attempt_at TIMESTAMPTZ,
+      last_synced_at TIMESTAMPTZ,
+      suppressed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (affiliate_id, campaign_id)
+    )`);
+  await run('outreach_contacts sync_attempts', () => sql`ALTER TABLE outreach_contacts ADD COLUMN IF NOT EXISTS sync_attempts INT NOT NULL DEFAULT 0`);
+  await run('outreach_contacts next_attempt_at', () => sql`ALTER TABLE outreach_contacts ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ`);
+  await run('idx_outreach_contacts_status', () => sql`CREATE INDEX IF NOT EXISTS idx_outreach_contacts_status ON outreach_contacts (sync_status)`);
+  await run('idx_outreach_contacts_email', () => sql`CREATE INDEX IF NOT EXISTS idx_outreach_contacts_email ON outreach_contacts (email)`);
+  await run('uq_outreach_contacts_campaign_email', () => sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_outreach_contacts_campaign_email ON outreach_contacts (campaign_id, LOWER(email))`);
+
+  await run('outreach_events table', () => sql`
+    CREATE TABLE IF NOT EXISTS outreach_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      affiliate_id TEXT,
+      campaign_id TEXT,
+      event_type TEXT NOT NULL,
+      external_id TEXT,
+      status TEXT NOT NULL DEFAULT 'ok',
+      payload JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  await run('idx_outreach_events_campaign', () => sql`CREATE INDEX IF NOT EXISTS idx_outreach_events_campaign ON outreach_events (campaign_id)`);
+  await run('idx_outreach_events_created_at', () => sql`CREATE INDEX IF NOT EXISTS idx_outreach_events_created_at ON outreach_events (created_at)`);
 
   // NOTE: migrate.ts also has an `UPDATE commissions ... FROM sales` data-repair
   // statement. It is intentionally NOT mirrored here — commissions.sale_id is NULL

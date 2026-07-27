@@ -19,6 +19,7 @@ const PAGE_NAMES: Record<string, string> = {
   '/leaderboard': 'Leaderboard',
   '/funnel': 'Funnel intelligence',
   '/growth': 'Affiliate growth',
+  '/mail': 'Affiliate mail center',
   '/warroom': 'Fraud war room',
   '/payouts': 'Payout review',
   '/enforcement': 'Enforcement',

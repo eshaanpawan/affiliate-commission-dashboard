@@ -12,6 +12,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -21,7 +22,11 @@ export const webhookEvents = pgTable('webhook_events', {
   eventType: text('event_type').notNull(),
   payload: jsonb('payload').notNull(),
   receivedAt: timestamp('received_at', { withTimezone: true }).defaultNow(),
-  processed: boolean('processed').default(true),
+  processed: boolean('processed').default(false),
+  processingStartedAt: timestamp('processing_started_at', { withTimezone: true }),
+  processedAt: timestamp('processed_at', { withTimezone: true }),
+  processingError: text('processing_error'),
+  attemptCount: integer('attempt_count').default(0).notNull(),
 });
 
 export const affiliates = pgTable('affiliates', {
@@ -133,6 +138,14 @@ export const affiliateTraffic = pgTable('affiliate_traffic', {
   signupsWithGclid: integer('signups_with_gclid').default(0),
   signupsWithGbraid: integer('signups_with_gbraid').default(0),
   signupsWithGadCampaignid: integer('signups_with_gad_campaignid').default(0),
+  signupsWithGoogle: integer('signups_with_google').default(0),
+  signupsWithMeta: integer('signups_with_meta').default(0),
+  signupsWithMicrosoft: integer('signups_with_microsoft').default(0),
+  signupsWithTiktok: integer('signups_with_tiktok').default(0),
+  signupsWithLinkedin: integer('signups_with_linkedin').default(0),
+  signupsWithReddit: integer('signups_with_reddit').default(0),
+  signupsWithX: integer('signups_with_x').default(0),
+  signupsWithApple: integer('signups_with_apple').default(0),
   signupsWithAnyAdParam: integer('signups_with_any_ad_param').default(0),
   fts: integer('fts').default(0),
   pageviews: integer('pageviews').default(0),
@@ -168,3 +181,42 @@ export const commissionHolds = pgTable('commission_holds', {
   decidedAt: timestamp('decided_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 });
+
+/** Durable Rewardful -> Instantly contact mapping and reconciliation state. */
+export const outreachContacts = pgTable('outreach_contacts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  affiliateId: text('affiliate_id').notNull(),
+  campaignId: text('campaign_id').notNull(),
+  email: text('email').notNull(),
+  instantlyLeadId: text('instantly_lead_id'),
+  segment: text('segment').default('onboarding').notNull(),
+  sourceUpdatedAt: timestamp('source_updated_at', { withTimezone: true }),
+  payloadHash: text('payload_hash'),
+  syncStatus: text('sync_status').default('pending').notNull(),
+  syncError: text('sync_error'),
+  syncAttempts: integer('sync_attempts').default(0).notNull(),
+  nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }),
+  lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+  suppressedAt: timestamp('suppressed_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  uniqueIndex('uq_outreach_contact_affiliate_campaign').on(t.affiliateId, t.campaignId),
+  index('idx_outreach_contacts_status').on(t.syncStatus),
+  index('idx_outreach_contacts_email').on(t.email),
+]);
+
+/** Append-only audit trail for imports, configuration changes, and mail actions. */
+export const outreachEvents = pgTable('outreach_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  affiliateId: text('affiliate_id'),
+  campaignId: text('campaign_id'),
+  eventType: text('event_type').notNull(),
+  externalId: text('external_id'),
+  status: text('status').default('ok').notNull(),
+  payload: jsonb('payload'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_outreach_events_campaign').on(t.campaignId),
+  index('idx_outreach_events_created_at').on(t.createdAt),
+]);

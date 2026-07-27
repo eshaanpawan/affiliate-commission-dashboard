@@ -9,10 +9,22 @@ export interface TokenTraffic {
   viaToken: string;
   signups: number;
   signupsWithAnyAdParam: number;
+  networkSignups: AdNetworkCounts;
   fts: number;
   pageviews: number;
   campaignIds: string[];
   campaignIdsOurs: string[];
+}
+
+export interface AdNetworkCounts {
+  google: number;
+  meta: number;
+  microsoft: number;
+  tiktok: number;
+  linkedin: number;
+  reddit: number;
+  x: number;
+  apple: number;
 }
 
 export interface AdRiskSignal {
@@ -38,6 +50,7 @@ export interface AdRisk {
     ourCampaignIds: string[];
     sharedCampaignIds: string[];
     tokens: string[];
+    networks: AdNetworkCounts;
   };
 }
 
@@ -68,6 +81,16 @@ export function computeAdRisk(
   const adSignups = rows.reduce((s, r) => s + r.signupsWithAnyAdParam, 0);
   const fts = rows.reduce((s, r) => s + r.fts, 0);
   const pageviews = rows.reduce((s, r) => s + r.pageviews, 0);
+  const networks: AdNetworkCounts = {
+    google: rows.reduce((s, r) => s + r.networkSignups.google, 0),
+    meta: rows.reduce((s, r) => s + r.networkSignups.meta, 0),
+    microsoft: rows.reduce((s, r) => s + r.networkSignups.microsoft, 0),
+    tiktok: rows.reduce((s, r) => s + r.networkSignups.tiktok, 0),
+    linkedin: rows.reduce((s, r) => s + r.networkSignups.linkedin, 0),
+    reddit: rows.reduce((s, r) => s + r.networkSignups.reddit, 0),
+    x: rows.reduce((s, r) => s + r.networkSignups.x, 0),
+    apple: rows.reduce((s, r) => s + r.networkSignups.apple, 0),
+  };
   const campaignIds = [...new Set(rows.flatMap(r => r.campaignIds))].filter(Boolean);
   const ourCampaignIds = [...new Set(rows.flatMap(r => r.campaignIdsOurs))].filter(Boolean);
   const sharedCampaignIds = campaignIds.filter(cid => {
@@ -90,7 +113,7 @@ export function computeAdRisk(
       label: 'Paid-ads traffic',
       severity: adPct >= 0.9 ? 'high' : 'medium',
       value: `${Math.round(adPct * 100)}%`,
-      detail: `${adSignups.toLocaleString()} of ${signups.toLocaleString()} signups arrived with Google Ads click params (gclid/gbraid/gad_campaignid) on their first-touch URL. Affiliates were approved for organic promotion, not ad buying.`,
+      detail: `${adSignups.toLocaleString()} of ${signups.toLocaleString()} signups arrived with a recognized paid-click identifier on their first-touch URL. This identifies the acquisition network, but does not by itself prove who placed the ad.`,
     });
   }
 
@@ -148,7 +171,7 @@ export function computeAdRisk(
     signals,
     stats: {
       signups, adSignups, adPct, fts, pageviews, organicSignups,
-      campaignIds, ourCampaignIds, sharedCampaignIds, tokens,
+      campaignIds, ourCampaignIds, sharedCampaignIds, tokens, networks,
     },
   };
 }

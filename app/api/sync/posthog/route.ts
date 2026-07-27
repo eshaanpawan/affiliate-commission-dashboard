@@ -12,6 +12,7 @@ import { sql as dsql } from 'drizzle-orm';
 import { isAuthed } from '@/lib/auth';
 import { runHogQL } from '@/lib/posthog';
 import { db, affiliateTraffic } from '@/lib/db/index';
+import { queueAffiliateOutreachContacts } from '@/lib/outreach';
 
 export const maxDuration = 120;
 
@@ -22,6 +23,14 @@ interface Row {
   signupsWithGclid: number;
   signupsWithGbraid: number;
   signupsWithGadCampaignid: number;
+  signupsWithGoogle: number;
+  signupsWithMeta: number;
+  signupsWithMicrosoft: number;
+  signupsWithTiktok: number;
+  signupsWithLinkedin: number;
+  signupsWithReddit: number;
+  signupsWithX: number;
+  signupsWithApple: number;
   signupsWithAnyAdParam: number;
   fts: number;
   pageviews: number;
@@ -72,10 +81,24 @@ export async function POST(req: Request) {
       extract(${u},'[?&]via=([^&#]+)') AS token,
       toDate(timestamp) AS day,
       count(DISTINCT person_id) AS signups,
-      countIf(${u} ILIKE '%gclid=%') AS with_gclid,
-      countIf(${u} ILIKE '%gbraid=%' OR ${u} ILIKE '%wbraid=%') AS with_gbraid,
-      countIf(${u} ILIKE '%gad_campaignid=%') AS with_campaignid,
-      countIf(${u} ILIKE '%gclid=%' OR ${u} ILIKE '%gbraid=%' OR ${u} ILIKE '%wbraid=%' OR ${u} ILIKE '%gad_campaignid=%' OR ${u} ILIKE '%gad_source=%') AS with_any,
+      count(DISTINCT if(${u} ILIKE '%gclid=%', person_id, NULL)) AS with_gclid,
+      count(DISTINCT if(${u} ILIKE '%gbraid=%' OR ${u} ILIKE '%wbraid=%', person_id, NULL)) AS with_gbraid,
+      count(DISTINCT if(${u} ILIKE '%gad_campaignid=%', person_id, NULL)) AS with_campaignid,
+      count(DISTINCT if(${u} ILIKE '%gclid=%' OR ${u} ILIKE '%gbraid=%' OR ${u} ILIKE '%wbraid=%' OR ${u} ILIKE '%gad_campaignid=%' OR ${u} ILIKE '%gad_source=%', person_id, NULL)) AS with_google,
+      count(DISTINCT if(${u} ILIKE '%fbclid=%', person_id, NULL)) AS with_meta,
+      count(DISTINCT if(${u} ILIKE '%msclkid=%', person_id, NULL)) AS with_microsoft,
+      count(DISTINCT if(${u} ILIKE '%ttclid=%', person_id, NULL)) AS with_tiktok,
+      count(DISTINCT if(${u} ILIKE '%li_fat_id=%', person_id, NULL)) AS with_linkedin,
+      count(DISTINCT if(${u} ILIKE '%rdt_cid=%', person_id, NULL)) AS with_reddit,
+      count(DISTINCT if(${u} ILIKE '%twclid=%', person_id, NULL)) AS with_x,
+      count(DISTINCT if(${u} ILIKE '%utm_source=apple%' OR (${u} ILIKE '%pt=%' AND ${u} ILIKE '%ct=%'), person_id, NULL)) AS with_apple,
+      count(DISTINCT if(
+        ${u} ILIKE '%gclid=%' OR ${u} ILIKE '%gbraid=%' OR ${u} ILIKE '%wbraid=%'
+        OR ${u} ILIKE '%gad_campaignid=%' OR ${u} ILIKE '%gad_source=%'
+        OR ${u} ILIKE '%fbclid=%' OR ${u} ILIKE '%msclkid=%' OR ${u} ILIKE '%ttclid=%'
+        OR ${u} ILIKE '%li_fat_id=%' OR ${u} ILIKE '%rdt_cid=%' OR ${u} ILIKE '%twclid=%'
+        OR ${u} ILIKE '%utm_source=apple%' OR (${u} ILIKE '%pt=%' AND ${u} ILIKE '%ct=%')
+      , person_id, NULL)) AS with_any,
       groupUniqArray(10)(extract(${u},'gad_campaignid=([0-9]+)')) AS campaign_ids
     FROM events
     WHERE event='sign_up' AND ${u} ILIKE '%via=%'
@@ -137,7 +160,10 @@ export async function POST(req: Request) {
       row = {
         viaToken: token, day,
         signups: 0, signupsWithGclid: 0, signupsWithGbraid: 0,
-        signupsWithGadCampaignid: 0, signupsWithAnyAdParam: 0,
+        signupsWithGadCampaignid: 0, signupsWithGoogle: 0,
+        signupsWithMeta: 0, signupsWithMicrosoft: 0, signupsWithTiktok: 0,
+        signupsWithLinkedin: 0, signupsWithReddit: 0, signupsWithX: 0,
+        signupsWithApple: 0, signupsWithAnyAdParam: 0,
         fts: 0, pageviews: 0, campaignIds: [], campaignIdsOurs: [],
         syncedAt,
       };
@@ -147,14 +173,24 @@ export async function POST(req: Request) {
   };
 
   for (const r of signupsRes!.results) {
-    const [token, day, signups, gclid, gbraid, campaignid, any, ids] = r as
-      [string | null, string, number, number, number, number, number, string[]];
+    const [token, day, signups, gclid, gbraid, campaignid, google, meta, microsoft,
+      tiktok, linkedin, reddit, x, apple, any, ids] = r as
+      [string | null, string, number, number, number, number, number, number, number,
+        number, number, number, number, number, number, string[]];
     if (!token || !day) continue;
     const row = get(token, day);
     row.signups = Number(signups);
     row.signupsWithGclid = Number(gclid);
     row.signupsWithGbraid = Number(gbraid);
     row.signupsWithGadCampaignid = Number(campaignid);
+    row.signupsWithGoogle = Number(google);
+    row.signupsWithMeta = Number(meta);
+    row.signupsWithMicrosoft = Number(microsoft);
+    row.signupsWithTiktok = Number(tiktok);
+    row.signupsWithLinkedin = Number(linkedin);
+    row.signupsWithReddit = Number(reddit);
+    row.signupsWithX = Number(x);
+    row.signupsWithApple = Number(apple);
     row.signupsWithAnyAdParam = Number(any);
     row.campaignIds = (ids ?? []).filter((id) => id && id.length > 0);
     row.campaignIdsOurs = row.campaignIds.filter((id) => oursIds.has(id));
@@ -185,6 +221,14 @@ export async function POST(req: Request) {
           signupsWithGclid: sqlExcluded('signups_with_gclid'),
           signupsWithGbraid: sqlExcluded('signups_with_gbraid'),
           signupsWithGadCampaignid: sqlExcluded('signups_with_gad_campaignid'),
+          signupsWithGoogle: sqlExcluded('signups_with_google'),
+          signupsWithMeta: sqlExcluded('signups_with_meta'),
+          signupsWithMicrosoft: sqlExcluded('signups_with_microsoft'),
+          signupsWithTiktok: sqlExcluded('signups_with_tiktok'),
+          signupsWithLinkedin: sqlExcluded('signups_with_linkedin'),
+          signupsWithReddit: sqlExcluded('signups_with_reddit'),
+          signupsWithX: sqlExcluded('signups_with_x'),
+          signupsWithApple: sqlExcluded('signups_with_apple'),
           signupsWithAnyAdParam: sqlExcluded('signups_with_any_ad_param'),
           fts: sqlExcluded('fts'),
           pageviews: sqlExcluded('pageviews'),
@@ -197,6 +241,10 @@ export async function POST(req: Request) {
   }
 
   const tokens = new Set(rows.map((r) => r.viaToken)).size;
+  // Re-evaluate outreach segments after every PostHog refresh. This only
+  // updates the durable queue; the Instantly worker still requires a
+  // Draft/Paused campaign and never activates or sends.
+  const outreachQueue = await queueAffiliateOutreachContacts();
 
   return NextResponse.json({
     ok: true,
@@ -204,6 +252,7 @@ export async function POST(req: Request) {
     tokens,
     rowsUpserted,
     oursCampaignCount: oursIds.size,
+    outreachQueue,
     tookMs: Date.now() - t0,
   });
 }
