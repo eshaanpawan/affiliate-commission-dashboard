@@ -2,16 +2,19 @@
 
 import * as React from 'react';
 import { useState } from 'react';
-import { ChevronDown, Info, RefreshCw } from 'lucide-react';
+import { ChevronDown, Info } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 
 import { useDashboard, paginate } from '@/lib/use-dashboard';
+import { useDashboardRange } from '@/components/DashboardRangeProvider';
+import { ChartRangeTabs } from '@/components/RangeTabs';
+import type { DashboardRange } from '@/lib/dashboard-range';
 import { Pager } from '@/components/Pager';
 import { SectionCard } from '@/components/SectionCard';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -22,7 +25,7 @@ const COUNTRY_CHART_CONFIG = {
   conversions: { label: 'Conversions', color: 'var(--chart-1)' },
 } satisfies ChartConfig;
 
-const GEO_TOOLTIP_TEXT = "Country is sourced from PostHog, not Rewardful. Each conversion's customer email (from Rewardful) is matched to a PostHog user via their sign_up event, then the country is taken from that user's $pageview geo data ($geoip_country_code). Conversions without a matching email or pageview show no country.";
+const GEO_TOOLTIP_TEXT = "Country is PostHog-enriched attribution stored against the Rewardful conversion. The conversion customer is matched to a PostHog user and the country comes from that user's first client-side pageview geo. Unmatched conversions remain unattributed instead of being guessed.";
 
 const PER_PAGE = 15;
 
@@ -42,13 +45,92 @@ function InfoTooltip({ text }: { text: string }) {
   );
 }
 
+function CountryOverviewCard() {
+  const { range: globalRange } = useDashboardRange();
+  const [rangeOverride, setRangeOverride] = useState<DashboardRange | null>(null);
+  const [view, setView] = useState<'chart' | 'table'>('chart');
+  const { data, loading } = useDashboard(rangeOverride);
+  const rows = data?.countriesByConversions ?? [];
+
+  return (
+    <Card className="mb-8 gap-0 overflow-hidden py-0">
+      <CardHeader className="[.border-b]:pb-0 gap-1 border-b py-4">
+        <CardTitle className="flex items-center text-sm">Conversions by Country<InfoTooltip text={GEO_TOOLTIP_TEXT} /></CardTitle>
+        <CardDescription className="text-xs">Top conversion markets in this chart&apos;s reporting window</CardDescription>
+        <CardAction className="flex flex-wrap items-center justify-end gap-2">
+          <ChartRangeTabs value={rangeOverride} globalRange={globalRange} onChange={setRangeOverride} />
+          <Tabs value={view} onValueChange={(value) => setView(value as 'chart' | 'table')}>
+            <TabsList className="h-8"><TabsTrigger value="chart" className="h-7 text-xs">Chart</TabsTrigger><TabsTrigger value="table" className="h-7 text-xs">Table</TabsTrigger></TabsList>
+          </Tabs>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="p-5">
+        {loading ? <Skeleton className="h-[280px] w-full" /> : rows.length === 0 ? (
+          <div className="text-muted-foreground flex h-[280px] items-center justify-center text-sm">No attributed country data in this window.</div>
+        ) : view === 'chart' ? (
+          <ChartContainer config={COUNTRY_CHART_CONFIG} className="h-[280px] w-full">
+            <BarChart data={rows.slice(0, 10)} margin={{ top: 4, right: 12, left: -18, bottom: 56 }}>
+              <CartesianGrid vertical={false} strokeDasharray="3 3" />
+              <XAxis dataKey="country_name" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} interval={0} angle={-30} textAnchor="end" />
+              <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} allowDecimals={false} width={44} />
+              <ChartTooltip cursor={false} content={<ChartTooltipContent nameKey="country_name" />} />
+              <Bar dataKey="conversions" fill="var(--color-conversions)" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ChartContainer>
+        ) : (
+          <Table>
+            <TableHeader><TableRow><TableHead>Country</TableHead><TableHead className="text-right">Conversions</TableHead></TableRow></TableHeader>
+            <TableBody>{rows.map((row) => <TableRow key={row.country_code}><TableCell>{row.country_name}</TableCell><TableCell className="text-right font-semibold tabular-nums">{row.conversions}</TableCell></TableRow>)}</TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AffiliateCountryBreakdown({ affiliateId }: { affiliateId: string }) {
+  const { range: globalRange } = useDashboardRange();
+  const [rangeOverride, setRangeOverride] = useState<DashboardRange | null>(null);
+  const [view, setView] = useState<'chart' | 'table'>('chart');
+  const { data, loading } = useDashboard(rangeOverride);
+  const affiliate = data?.affiliateCountries.find((row) => row.affiliate_id === affiliateId);
+  const countries = affiliate?.countries ?? [];
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <ChartRangeTabs value={rangeOverride} globalRange={globalRange} onChange={setRangeOverride} />
+        <Tabs value={view} onValueChange={(value) => setView(value as 'chart' | 'table')}>
+          <TabsList><TabsTrigger value="chart">Chart</TabsTrigger><TabsTrigger value="table">Table</TabsTrigger></TabsList>
+        </Tabs>
+      </div>
+      {loading ? <Skeleton className="mt-4 h-[240px] w-full" /> : countries.length === 0 ? (
+        <div className="text-muted-foreground flex h-[180px] items-center justify-center text-sm">No country-attributed conversions in this window.</div>
+      ) : view === 'chart' ? (
+        <ChartContainer config={COUNTRY_CHART_CONFIG} className="mt-4 h-[240px] w-full">
+          <BarChart data={countries} margin={{ top: 4, right: 12, left: -18, bottom: 56 }}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" />
+            <XAxis dataKey="country_name" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} interval={0} angle={-30} textAnchor="end" />
+            <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} allowDecimals={false} width={44} />
+            <ChartTooltip cursor={false} content={<ChartTooltipContent nameKey="country_name" />} />
+            <Bar dataKey="conversions" fill="var(--color-conversions)" radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ChartContainer>
+      ) : (
+        <Table className="mt-4">
+          <TableHeader><TableRow><TableHead>Country</TableHead><TableHead className="text-right">Conversions</TableHead></TableRow></TableHeader>
+          <TableBody>{countries.map((country) => <TableRow key={country.country_code}><TableCell>{country.country_name}</TableCell><TableCell className="text-right font-semibold tabular-nums">{country.conversions}</TableCell></TableRow>)}</TableBody>
+        </Table>
+      )}
+    </div>
+  );
+}
+
 export default function CountriesPage() {
   const { data, loading, refresh } = useDashboard();
 
-  const [countryView, setCountryView] = useState<'chart' | 'table'>('chart');
   const [affiliateCountriesExpanded, setAffiliateCountriesExpanded] = useState(true);
   const [expandedAffiliateCountries, setExpandedAffiliateCountries] = useState<Set<string>>(new Set());
-  const [affiliateCountryView, setAffiliateCountryView] = useState<Record<string, 'chart' | 'table'>>({});
   const [page, setPage] = useState(1);
 
   if (loading && !data) {
@@ -78,65 +160,12 @@ export default function CountriesPage() {
       {/* Header */}
       <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Countries</h1>
+          <h1 className="text-2xl font-bold">Countries</h1>
           <p className="text-muted-foreground mt-1 text-sm">Conversion geography — overall and per affiliate</p>
         </div>
-        <Button size="sm" onClick={() => refresh()} disabled={loading}>
-          <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </Button>
       </div>
 
-      {/* Country breakdown */}
-      {data.countriesByConversions.length > 0 && (
-        <Card className="mb-8 gap-0 overflow-hidden py-0">
-          <CardHeader className="[.border-b]:pb-0 gap-1 border-b py-4">
-            <CardTitle className="flex items-center text-sm">
-              Conversions by Country
-              <InfoTooltip text={GEO_TOOLTIP_TEXT} />
-            </CardTitle>
-            <CardDescription className="text-xs">Top 10 countries by total conversions</CardDescription>
-            <div className="col-start-2 row-span-2 row-start-1 self-start justify-self-end">
-              <Tabs value={countryView} onValueChange={(v) => setCountryView(v as 'chart' | 'table')}>
-                <TabsList>
-                  <TabsTrigger value="chart">Chart</TabsTrigger>
-                  <TabsTrigger value="table">Table</TabsTrigger>
-                </TabsList>
-              </Tabs>
-            </div>
-          </CardHeader>
-          <CardContent className="p-5">
-            {countryView === 'chart' ? (
-              <ChartContainer config={COUNTRY_CHART_CONFIG} className="h-[280px] w-full">
-                <BarChart data={data.countriesByConversions.slice(0, 10)} margin={{ top: 4, right: 12, left: -18, bottom: 56 }}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                  <XAxis dataKey="country_name" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} interval={0} angle={-30} textAnchor="end" />
-                  <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} allowDecimals={false} width={44} />
-                  <ChartTooltip cursor={false} content={<ChartTooltipContent nameKey="country_name" />} />
-                  <Bar dataKey="conversions" fill="var(--color-conversions)" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ChartContainer>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Country</TableHead>
-                    <TableHead className="text-right">Conversions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.countriesByConversions.map(r => (
-                    <TableRow key={r.country_code}>
-                      <TableCell>{r.country_name}</TableCell>
-                      <TableCell className="text-right font-semibold tabular-nums text-indigo-600 dark:text-indigo-400">{r.conversions}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-      )}
+      <CountryOverviewCard />
 
       {/* Affiliate x Country breakdown */}
       {data.affiliateCountries.length > 0 && (
@@ -157,7 +186,6 @@ export default function CountriesPage() {
             <TableBody>
               {paged.rows.map((a) => {
                 const isExpanded = expandedAffiliateCountries.has(a.affiliate_id);
-                const view = affiliateCountryView[a.affiliate_id] ?? 'chart';
                 return (
                   <React.Fragment key={a.affiliate_id}>
                     <TableRow
@@ -181,44 +209,7 @@ export default function CountriesPage() {
                     {isExpanded && (
                       <TableRow className="bg-muted/50 hover:bg-muted/50">
                         <TableCell colSpan={2} className="px-5 py-4">
-                          <Tabs
-                            value={view}
-                            onValueChange={(v) => setAffiliateCountryView(m => ({ ...m, [a.affiliate_id]: v as 'chart' | 'table' }))}
-                            className="gap-4"
-                          >
-                            <TabsList onClick={(e) => e.stopPropagation()}>
-                              <TabsTrigger value="chart">Chart</TabsTrigger>
-                              <TabsTrigger value="table">Table</TabsTrigger>
-                            </TabsList>
-                          </Tabs>
-                          {view === 'chart' ? (
-                            <ChartContainer config={COUNTRY_CHART_CONFIG} className="mt-4 h-[240px] w-full">
-                              <BarChart data={a.countries} margin={{ top: 4, right: 12, left: -18, bottom: 56 }}>
-                                <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                                <XAxis dataKey="country_name" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} interval={0} angle={-30} textAnchor="end" />
-                                <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} allowDecimals={false} width={44} />
-                                <ChartTooltip cursor={false} content={<ChartTooltipContent nameKey="country_name" />} />
-                                <Bar dataKey="conversions" fill="var(--color-conversions)" radius={[4, 4, 0, 0]} />
-                              </BarChart>
-                            </ChartContainer>
-                          ) : (
-                            <Table className="mt-4">
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>Country</TableHead>
-                                  <TableHead className="text-right">Conversions</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {a.countries.map(c => (
-                                  <TableRow key={c.country_code}>
-                                    <TableCell>{c.country_name}</TableCell>
-                                    <TableCell className="text-right font-semibold tabular-nums text-indigo-600 dark:text-indigo-400">{c.conversions}</TableCell>
-                                  </TableRow>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          )}
+                          <AffiliateCountryBreakdown affiliateId={a.affiliate_id} />
                         </TableCell>
                       </TableRow>
                     )}

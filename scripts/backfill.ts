@@ -13,6 +13,20 @@ const authHeader = 'Basic ' + Buffer.from(API_SECRET + ':').toString('base64');
 
 const FROM_DATE = new Date('2026-01-01T00:00:00Z');
 const ALL_TIME_DATE = new Date('2020-01-01T00:00:00Z');
+const configuredPageDelay = Number.parseInt(
+  process.env.BACKFILL_PAGE_DELAY_MS ?? '800',
+  10,
+);
+const PAGE_DELAY_MS = Number.isFinite(configuredPageDelay)
+  ? Math.max(450, configuredPageDelay)
+  : 800;
+const configuredConcurrency = Number.parseInt(
+  process.env.BACKFILL_PAGE_CONCURRENCY ?? '1',
+  10,
+);
+const PAGE_CONCURRENCY = Number.isFinite(configuredConcurrency)
+  ? Math.min(2, Math.max(1, configuredConcurrency))
+  : 1;
 
 async function fetchAll(path: string, fromDate: Date = FROM_DATE): Promise<unknown[]> {
   const results: unknown[] = [];
@@ -65,14 +79,114 @@ async function fetchAll(path: string, fromDate: Date = FROM_DATE): Promise<unkno
   return results;
 }
 
+async function processAll(
+  path: string,
+  processPage: (records: Record<string, unknown>[]) => Promise<void>,
+  fromDate: Date = FROM_DATE,
+  startPage = 1,
+): Promise<{ processed: number; seenIds: string[] }> {
+  let page = Math.max(1, startPage);
+  let processed = 0;
+  let pendingRecords: Record<string, unknown>[] = [];
+  const seenIds = new Set<string>();
+
+  async function flushPending() {
+    if (pendingRecords.length === 0) return;
+    await processPage(pendingRecords);
+    processed += pendingRecords.length;
+    pendingRecords = [];
+  }
+
+  async function fetchPage(pageNumber: number): Promise<{
+    json: {
+      data: Record<string, unknown>[];
+      pagination: { total_pages: number };
+    };
+    pageNumber: number;
+  }> {
+    const sep = path.includes('?') ? '&' : '?';
+    let retries = 0;
+
+    while (true) {
+      const response = await fetch(
+        `${BASE_URL}${path}${sep}page=${pageNumber}&limit=100`,
+        { headers: { Authorization: authHeader } },
+      );
+      if (response.status === 429) {
+        retries++;
+        const wait = 2000 * retries;
+        console.log(`  Rate limited on page ${pageNumber}, waiting ${wait}ms...`);
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, wait));
+        continue;
+      }
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`API error for ${path} page ${pageNumber}: ${response.status} ${body}`);
+      }
+
+      const json = await response.json() as {
+        data: Record<string, unknown>[];
+        pagination: { total_pages: number };
+      };
+      return { json, pageNumber };
+    }
+  }
+
+  let totalPages: number | null = null;
+  while (true) {
+    const pagesToFetch: number[] = Array.from(
+      { length: totalPages == null ? 1 : PAGE_CONCURRENCY },
+      (_, offset) => page + offset,
+    ).filter((pageNumber) => totalPages == null || pageNumber <= totalPages);
+    const payloads = await Promise.all(pagesToFetch.map(fetchPage));
+    let finished = false;
+
+    for (const { json, pageNumber } of payloads) {
+      totalPages = json.pagination.total_pages;
+      for (const record of json.data) {
+        if (record.id) seenIds.add(String(record.id));
+      }
+      const records = json.data.filter((record) => {
+        const date = new Date(record.created_at as string);
+        return date >= fromDate;
+      });
+
+      pendingRecords.push(...records);
+      if (pendingRecords.length >= 500) await flushPending();
+
+      const oldest = json.data.at(-1);
+      const allOlder = oldest
+        ? new Date(oldest.created_at as string) < fromDate
+        : false;
+
+      console.log(
+        `  ${path} page ${pageNumber}/${json.pagination.total_pages} — fetched ${records.length} in-range records (${processed} committed, ${pendingRecords.length} buffered)`,
+      );
+
+      page = pageNumber + 1;
+      if (pageNumber >= json.pagination.total_pages || allOlder) {
+        finished = true;
+        break;
+      }
+    }
+
+    if (finished) {
+      await flushPending();
+      break;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, PAGE_DELAY_MS));
+  }
+
+  return { processed, seenIds: [...seenIds] };
+}
+
 function chunks<T>(arr: T[], size: number): T[][] {
   const result: T[][] = [];
   for (let i = 0; i < arr.length; i += size) result.push(arr.slice(i, i + size));
   return result;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function dedupe(arr: any[]): any[] {
+function dedupe<T extends { id: string }>(arr: T[]): T[] {
   const seen = new Set<string>();
   return arr.filter((r) => {
     if (seen.has(r.id)) return false;
@@ -82,7 +196,6 @@ function dedupe(arr: any[]): any[] {
 }
 
 // Build link_id → affiliate_id map from affiliates with links expanded
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function buildLinkMap(): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   let page = 1;
@@ -299,39 +412,90 @@ async function backfillPayouts(payouts: any[]) {
 async function main() {
   console.log('Starting backfill from Rewardful API...\n');
 
-  console.log('Fetching affiliates (with links)...');
-  const affiliates = await fetchAll('/affiliates?expand[]=links', ALL_TIME_DATE);
-  console.log(`→ Inserting ${affiliates.length} affiliates into DB...`);
-  await backfillAffiliates(affiliates as never[]);
-  console.log('✅ Affiliates done\n');
+  const referralStartPage = Number.parseInt(
+    process.env.BACKFILL_REFERRALS_START_PAGE ?? '1',
+    10,
+  );
+  const safeReferralStartPage = Number.isFinite(referralStartPage)
+    ? Math.max(1, referralStartPage)
+    : 1;
+  const skipAffiliates = process.env.BACKFILL_SKIP_AFFILIATES === '1';
+  const skipReferrals = process.env.BACKFILL_SKIP_REFERRALS === '1';
+  const skipSales = process.env.BACKFILL_SKIP_SALES === '1';
+  const skipCommissions = process.env.BACKFILL_SKIP_COMMISSIONS === '1';
+  const skipPayouts = process.env.BACKFILL_SKIP_PAYOUTS === '1';
+
+  if (skipAffiliates) {
+    console.log('Skipping affiliate upsert (BACKFILL_SKIP_AFFILIATES=1)\n');
+  } else {
+    console.log('Fetching affiliates (with links)...');
+    const affiliates = await fetchAll('/affiliates?expand[]=links', ALL_TIME_DATE);
+    console.log(`→ Inserting ${affiliates.length} affiliates into DB...`);
+    await backfillAffiliates(affiliates as never[]);
+    console.log('✅ Affiliates done\n');
+  }
 
   console.log('Building link → affiliate map...');
   const linkMap = await buildLinkMap();
   console.log(`→ Built map with ${linkMap.size} links\n`);
 
-  console.log('Fetching referrals (all time)...');
-  const referrals = await fetchAll('/referrals', ALL_TIME_DATE);
-  console.log(`→ Inserting ${referrals.length} referrals into DB...`);
-  await backfillReferrals(referrals as never[], linkMap);
-  console.log('✅ Referrals done\n');
+  if (skipReferrals) {
+    console.log('Skipping referrals (BACKFILL_SKIP_REFERRALS=1)\n');
+  } else {
+    console.log(`Fetching referrals (all time, starting at page ${safeReferralStartPage})...`);
+    const { processed: referralCount } = await processAll(
+      '/referrals',
+      (records) => backfillReferrals(records, linkMap),
+      ALL_TIME_DATE,
+      safeReferralStartPage,
+    );
+    console.log(`✅ Referrals done — ${referralCount} records reconciled\n`);
+  }
 
-  console.log('Fetching sales (all time)...');
-  const sales = await fetchAll('/sales', ALL_TIME_DATE);
-  console.log(`→ Inserting ${sales.length} sales into DB...`);
-  await backfillSales(sales as never[], linkMap);
-  console.log('✅ Sales done\n');
+  if (skipSales) {
+    console.log('Skipping sales (BACKFILL_SKIP_SALES=1)\n');
+  } else {
+    console.log('Fetching sales (all time)...');
+    const { processed: saleCount, seenIds: saleIds } = await processAll(
+      '/sales',
+      (records) => backfillSales(records, linkMap),
+      ALL_TIME_DATE,
+    );
+    if (saleIds.length > 0) {
+      await sql`UPDATE sales SET status = 'deleted' WHERE status <> 'deleted' AND NOT (rewardful_id = ANY(${saleIds}::text[]))`;
+    }
+    console.log(`✅ Sales done — ${saleCount} records reconciled\n`);
+  }
 
-  console.log('Fetching commissions (all time)...');
-  const commissions = await fetchAll('/commissions', ALL_TIME_DATE);
-  console.log(`→ Inserting ${commissions.length} commissions into DB...`);
-  await backfillCommissions(commissions as never[]);
-  console.log('✅ Commissions done\n');
+  if (skipCommissions) {
+    console.log('Skipping commissions (BACKFILL_SKIP_COMMISSIONS=1)\n');
+  } else {
+    console.log('Fetching commissions (all time)...');
+    const { processed: commissionCount, seenIds: commissionIds } = await processAll(
+      '/commissions',
+      (records) => backfillCommissions(records),
+      ALL_TIME_DATE,
+    );
+    if (commissionIds.length > 0) {
+      await sql`UPDATE commissions SET status = 'deleted' WHERE status <> 'deleted' AND NOT (rewardful_id = ANY(${commissionIds}::text[]))`;
+    }
+    console.log(`✅ Commissions done — ${commissionCount} records reconciled\n`);
+  }
 
-  console.log('Fetching payouts (all time)...');
-  const payouts = await fetchAll('/payouts', ALL_TIME_DATE);
-  console.log(`→ Inserting ${payouts.length} payouts into DB...`);
-  await backfillPayouts(payouts as never[]);
-  console.log('✅ Payouts done\n');
+  if (skipPayouts) {
+    console.log('Skipping payouts (BACKFILL_SKIP_PAYOUTS=1)\n');
+  } else {
+    console.log('Fetching payouts (all time)...');
+    const { processed: payoutCount, seenIds: payoutIds } = await processAll(
+      '/payouts',
+      (records) => backfillPayouts(records),
+      ALL_TIME_DATE,
+    );
+    if (payoutIds.length > 0) {
+      await sql`UPDATE payouts SET status = 'deleted' WHERE status <> 'deleted' AND NOT (rewardful_id = ANY(${payoutIds}::text[]))`;
+    }
+    console.log(`✅ Payouts done — ${payoutCount} records reconciled\n`);
+  }
 
   console.log('🎉 Backfill complete!');
 }

@@ -22,14 +22,19 @@ export function SectionCard({ title, description, open, onOpenChange, action, ch
     <Card className={cn('overflow-hidden py-0', className)}>
       <Collapsible open={open} onOpenChange={onOpenChange}>
         <CardHeader className="[.border-b]:pb-0 gap-1 border-b py-4">
-          <CollapsibleTrigger className="group flex w-full cursor-pointer items-center gap-2 text-left">
-            <div className="min-w-0 flex-1">
-              <CardTitle className="flex items-center text-sm">{title}</CardTitle>
-              {description && <CardDescription className="mt-0.5 text-xs">{description}</CardDescription>}
-            </div>
-            <ChevronDown className="text-muted-foreground size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
-          </CollapsibleTrigger>
-          {action && <CardAction>{action}</CardAction>}
+          <div className="min-w-0">
+            <CardTitle className="flex items-center text-sm">{title}</CardTitle>
+            {description && <CardDescription className="mt-0.5 text-xs">{description}</CardDescription>}
+          </div>
+          <CardAction className="flex items-center gap-2">
+            {action}
+            <CollapsibleTrigger
+              aria-label={open ? 'Collapse section' : 'Expand section'}
+              className="group hover:bg-muted focus-visible:ring-ring inline-flex size-8 cursor-pointer items-center justify-center rounded-md outline-none focus-visible:ring-2"
+            >
+              <ChevronDown className="text-muted-foreground size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+            </CollapsibleTrigger>
+          </CardAction>
         </CardHeader>
         <CollapsibleContent>{children}</CollapsibleContent>
       </Collapsible>

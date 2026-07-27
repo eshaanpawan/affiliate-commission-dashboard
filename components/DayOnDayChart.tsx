@@ -1,7 +1,8 @@
 'use client';
 
 import { Bar, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from 'recharts';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   ChartConfig,
   ChartContainer,
@@ -19,9 +20,11 @@ interface DayOnDayChartProps {
   bars: BarDef[];
   valuePrefix?: string;
   secondaryKey?: string; // key to show as line on right Y-axis
+  action?: React.ReactNode;
+  loading?: boolean;
 }
 
-export function DayOnDayChart({ title, data, bars, valuePrefix = '', secondaryKey }: DayOnDayChartProps) {
+export function DayOnDayChart({ title, data, bars, valuePrefix = '', secondaryKey, action, loading = false }: DayOnDayChartProps) {
   const formatted = data.map((d) => ({
     ...d,
     day: (() => {
@@ -43,9 +46,12 @@ export function DayOnDayChart({ title, data, bars, valuePrefix = '', secondaryKe
     <Card className="gap-4">
       <CardHeader>
         <CardTitle className="text-sm">{title}</CardTitle>
+        {action && <CardAction>{action}</CardAction>}
       </CardHeader>
       <CardContent>
-        {data.length === 0 ? (
+        {loading ? (
+          <Skeleton className="h-[200px] w-full" aria-label={`Loading ${title}`} />
+        ) : data.length === 0 ? (
           <div className="text-muted-foreground flex h-40 items-center justify-center text-sm">
             No data yet — waiting for webhook events
           </div>

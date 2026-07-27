@@ -28,6 +28,14 @@ interface WarRoomAffiliate {
   conversions: number;
   clicks: number;
   holdStatus: string | null;
+  countries: { code: string; name: string; conversions: number }[];
+  observedAdTerms: {
+    field: 'utm_term' | 'utm_campaign';
+    value: string;
+    referrals: number;
+    brandMatch: boolean;
+  }[];
+  commercialAssessment: 'productive_unproven' | 'nonconverting_paid' | 'insufficient_evidence';
   risk: AdRisk;
 }
 
@@ -37,7 +45,7 @@ export async function GET(req: Request) {
   }
   const days = Math.min(400, Math.max(7, Number(new URL(req.url).searchParams.get('days')) || 180));
 
-  const [trafficRows, tokenAffRows, affRows, holdRows, dailyRows] = await Promise.all([
+  const [trafficRows, tokenAffRows, affRows, holdRows, dailyRows, countryRows, adTermRows] = await Promise.all([
     // Per-token traffic summed over the window, campaign arrays unioned.
     db.execute(sql`
       SELECT t.via_token,
@@ -47,14 +55,14 @@ export async function GET(req: Request) {
         SUM(t.pageviews)::int AS pageviews,
         COALESCE((
           SELECT array_agg(DISTINCT c) FROM affiliate_traffic t2, unnest(t2.campaign_ids) AS c
-          WHERE t2.via_token = t.via_token AND t2.day >= NOW() - MAKE_INTERVAL(days => ${days}) AND c <> ''
+          WHERE t2.via_token = t.via_token AND t2.day >= CURRENT_DATE - ${days - 1}::int AND c <> ''
         ), '{}') AS campaign_ids,
         COALESCE((
           SELECT array_agg(DISTINCT c) FROM affiliate_traffic t2, unnest(t2.campaign_ids_ours) AS c
-          WHERE t2.via_token = t.via_token AND t2.day >= NOW() - MAKE_INTERVAL(days => ${days}) AND c <> ''
+          WHERE t2.via_token = t.via_token AND t2.day >= CURRENT_DATE - ${days - 1}::int AND c <> ''
         ), '{}') AS campaign_ids_ours
       FROM affiliate_traffic t
-      WHERE t.day >= NOW() - MAKE_INTERVAL(days => ${days})
+      WHERE t.day >= CURRENT_DATE - ${days - 1}::int
       GROUP BY t.via_token
     `),
     // token -> affiliate (earliest referral wins, same rule the tts route uses)
@@ -79,8 +87,45 @@ export async function GET(req: Request) {
         SUM(fts)::int AS fts,
         SUM(pageviews)::int AS pageviews
       FROM affiliate_traffic
-      WHERE day >= NOW() - MAKE_INTERVAL(days => ${Math.min(days, 90)})
+      WHERE day >= CURRENT_DATE - ${days - 1}::int
       GROUP BY day ORDER BY day ASC
+    `),
+    db.execute(sql`
+      SELECT affiliate_id, country_code, country_name, COUNT(*)::int AS conversions
+      FROM referrals
+      WHERE status = 'converted' AND affiliate_id IS NOT NULL AND country_code IS NOT NULL
+        AND created_at >= CURRENT_DATE - ${days - 1}::int
+      GROUP BY affiliate_id, country_code, country_name
+      ORDER BY conversions DESC
+    `),
+    db.execute(sql`
+      WITH evidence AS (
+        SELECT affiliate_id, 'utm_term'::text AS field, TRIM(utm_term) AS value,
+          COUNT(*)::int AS referrals
+        FROM referrals
+        WHERE affiliate_id IS NOT NULL
+          AND created_at >= CURRENT_DATE - ${days - 1}::int
+          AND utm_term IS NOT NULL AND TRIM(utm_term) <> ''
+        GROUP BY affiliate_id, TRIM(utm_term)
+        UNION ALL
+        SELECT affiliate_id, 'utm_campaign'::text AS field, TRIM(utm_campaign) AS value,
+          COUNT(*)::int AS referrals
+        FROM referrals
+        WHERE affiliate_id IS NOT NULL
+          AND created_at >= CURRENT_DATE - ${days - 1}::int
+          AND utm_campaign IS NOT NULL AND TRIM(utm_campaign) <> ''
+        GROUP BY affiliate_id, TRIM(utm_campaign)
+      ),
+      ranked AS (
+        SELECT *, ROW_NUMBER() OVER (
+          PARTITION BY affiliate_id ORDER BY referrals DESC, value ASC
+        ) AS position
+        FROM evidence
+      )
+      SELECT affiliate_id, field, value, referrals
+      FROM ranked
+      WHERE position <= 12
+      ORDER BY affiliate_id, referrals DESC, value ASC
     `),
   ]);
 
@@ -115,6 +160,29 @@ export async function GET(req: Request) {
     holdByAffiliate.set(String(r.affiliate_id), String(r.status));
   }
 
+  const countriesByAffiliate = new Map<string, { code: string; name: string; conversions: number }[]>();
+  for (const r of countryRows.rows as Record<string, unknown>[]) {
+    const affiliateId = String(r.affiliate_id);
+    const list = countriesByAffiliate.get(affiliateId) ?? [];
+    list.push({ code: String(r.country_code), name: String(r.country_name ?? r.country_code), conversions: Number(r.conversions) });
+    countriesByAffiliate.set(affiliateId, list);
+  }
+
+  const termsByAffiliate = new Map<string, WarRoomAffiliate['observedAdTerms']>();
+  for (const r of adTermRows.rows as Record<string, unknown>[]) {
+    const affiliateId = String(r.affiliate_id);
+    const value = String(r.value);
+    const normalized = value.toLowerCase();
+    const list = termsByAffiliate.get(affiliateId) ?? [];
+    list.push({
+      field: String(r.field) === 'utm_term' ? 'utm_term' : 'utm_campaign',
+      value,
+      referrals: Number(r.referrals),
+      brandMatch: normalized.includes('runable') || normalized.includes('runable.com'),
+    });
+    termsByAffiliate.set(affiliateId, list);
+  }
+
   const campaignOwners = buildCampaignOwners(trafficByToken, affiliateByToken);
 
   const affiliates: WarRoomAffiliate[] = [];
@@ -137,6 +205,13 @@ export async function GET(req: Request) {
       conversions: Number(r.conversions ?? 0),
       clicks: Number(r.visitors ?? 0),
       holdStatus: holdByAffiliate.get(id) ?? null,
+      countries: countriesByAffiliate.get(id) ?? [],
+      observedAdTerms: termsByAffiliate.get(id) ?? [],
+      commercialAssessment: risk.stats.adSignups >= 10 && risk.stats.fts >= 3
+        ? 'productive_unproven'
+        : risk.stats.adSignups >= 10 && risk.stats.fts === 0
+          ? 'nonconverting_paid'
+          : 'insufficient_evidence',
       risk,
     });
   }

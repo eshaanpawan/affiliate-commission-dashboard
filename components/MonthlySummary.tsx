@@ -31,6 +31,9 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
+import { useDashboardRange } from '@/components/DashboardRangeProvider';
+import { ChartRangeTabs } from '@/components/RangeTabs';
+import type { DashboardRange } from '@/lib/dashboard-range';
 
 interface MonthlyRow {
   month: string;
@@ -72,14 +75,19 @@ function fmtMonthLabel(month: string): string {
   });
 }
 
-export function MonthlySummary() {
+export function MonthlySummary({ compact = false }: { compact?: boolean }) {
+  const { range: globalRange, refreshVersion } = useDashboardRange();
+  const [rangeOverride, setRangeOverride] = React.useState<DashboardRange | null>(null);
+  const effectiveRange = rangeOverride ?? globalRange;
   const [data, setData] = React.useState<MonthlyResponse | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [cumulative, setCumulative] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
-    fetch('/api/monthly')
+    setData(null);
+    setError(null);
+    fetch(`/api/monthly?period=${effectiveRange}`, { cache: 'no-store' })
       .then((res) => {
         if (!res.ok) throw new Error(`Request failed (${res.status})`);
         return res.json();
@@ -93,7 +101,7 @@ export function MonthlySummary() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [effectiveRange, refreshVersion]);
 
   const chartData = React.useMemo(() => {
     if (!data) return [];
@@ -156,7 +164,8 @@ export function MonthlySummary() {
         <CardDescription>
           Month-by-month activity across the affiliate program
         </CardDescription>
-        <CardAction className="flex items-center gap-4">
+        <CardAction className="flex flex-wrap items-center justify-end gap-3">
+          <ChartRangeTabs value={rangeOverride} globalRange={globalRange} onChange={setRangeOverride} />
           <div className="flex items-center gap-2">
             <Switch
               id="monthly-cumulative"
@@ -237,7 +246,7 @@ export function MonthlySummary() {
               </LineChart>
             </ChartContainer>
 
-            <div className="overflow-x-auto">
+            {!compact && <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -287,7 +296,7 @@ export function MonthlySummary() {
                   </TableRow>
                 </TableBody>
               </Table>
-            </div>
+            </div>}
           </>
         )}
       </CardContent>

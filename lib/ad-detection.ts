@@ -98,10 +98,10 @@ export function computeAdRisk(
     score += 60;
     signals.push({
       key: 'campaign_hijack',
-      label: 'Our-campaign hijack',
+      label: 'Our-campaign overlap',
       severity: 'high',
       value: `${ourCampaignIds.length} campaign${ourCampaignIds.length > 1 ? 's' : ''}`,
-      detail: `Signups carry gad_campaignid values belonging to Runable's OWN Google Ads account (${ourCampaignIds.join(', ')}). The affiliate stamped their token onto traffic we already paid Google for — we pay for the click AND the commission.`,
+      detail: `Signups carry gad_campaignid values belonging to Runable's Google Ads account (${ourCampaignIds.join(', ')}). This is strong evidence of possible commission cannibalization, but the landing URL and redirect chain should be reviewed before enforcement.`,
     });
   }
 
@@ -109,10 +109,10 @@ export function computeAdRisk(
     score += 35;
     signals.push({
       key: 'shared_campaign_ring',
-      label: 'Campaign shared across affiliates',
+      label: 'Campaign ID shared across affiliates',
       severity: 'high',
       value: `${sharedCampaignIds.length} shared`,
-      detail: `Google Ads campaign id(s) ${sharedCampaignIds.slice(0, 5).join(', ')} also appear under other affiliates' tokens — a coordination-ring fingerprint (one operator, many accounts).`,
+      detail: `Google Ads campaign id(s) ${sharedCampaignIds.slice(0, 5).join(', ')} also appear under other affiliates' tokens. This can indicate one operator with multiple accounts, an agency, a shared redirect, or a tracking fault; corroboration is required.`,
     });
   }
 

@@ -1,12 +1,12 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronsUpDown, Flag, RefreshCw } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronsUpDown, Flag, Search, ShieldAlert, UserCheck, UserX } from 'lucide-react';
 
 import { AffiliateModal } from '@/components/AffiliateModal';
 import { Pager } from '@/components/Pager';
 import { useDashboard, paginate, type Affiliate } from '@/lib/use-dashboard';
-import { fmtCents as fmt, pct, fmtDuration, ttsTone, similarityTone } from '@/lib/format';
+import { fmtCents as fmt, pct } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
 import { Badge } from '@/components/ui/badge';
@@ -15,9 +15,8 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
-type SortKey = 'referrals' | 'conversions' | 'revenueCents' | 'commissionCents';
+type SortKey = 'referrals' | 'conversions' | 'posthogPageviews' | 'posthogFts' | 'revenueCents' | 'commissionCents';
 
 const PER_PAGE = 25;
 
@@ -29,7 +28,7 @@ function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; s
 }
 
 export default function AffiliatesPage() {
-  const { data, ttsData, ttsByAffiliateId, loading, syncing, refresh, sync } = useDashboard();
+  const { data, loading, refresh, period } = useDashboard();
   const [sortKey, setSortKey] = useState<SortKey>('conversions');
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc');
   const [search, setSearch] = useState('');
@@ -83,12 +82,16 @@ export default function AffiliatesPage() {
   return (
     <div className="mx-auto w-full max-w-[112rem] px-4 py-8">
       {selectedAffiliate && (() => {
-        const tts = ttsByAffiliateId.get(selectedAffiliate.id);
+        const geography = data.affiliateCountries.find((row) => row.affiliate_id === selectedAffiliate.id);
         return (
           <AffiliateModal
             affiliate={selectedAffiliate}
-            ftsCountries={tts?.countries ?? []}
-            ftsTotal={tts?.fts ?? 0}
+            ftsCountries={(geography?.countries ?? []).map((country) => ({
+              code: country.country_code,
+              name: country.country_name,
+              count: country.conversions,
+            }))}
+            ftsTotal={selectedAffiliate.posthogFts}
             onClose={() => setSelectedAffiliate(null)}
           />
         );
@@ -97,25 +100,23 @@ export default function AffiliatesPage() {
       {/* Header */}
       <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Affiliates</h1>
-          <p className="text-muted-foreground mt-1 text-sm">All affiliates — click any row to see growth details</p>
+          <h1 className="text-2xl font-bold">Affiliates</h1>
+          <p className="text-muted-foreground mt-1 text-sm">Rewardful accounts with PostHog traffic for the selected {period === 'all' ? 'all-time' : period} window</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => refresh()} disabled={loading}>
-            <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-            {loading ? 'Refreshing…' : 'Refresh'}
-          </Button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button size="sm" variant="outline" onClick={sync} disabled={syncing}>
-                {syncing ? 'Syncing…' : 'Sync from Rewardful'}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-xs">
-              Pull latest data from Rewardful into the DB. Run before Refresh if you want the freshest source data.
-            </TooltipContent>
-          </Tooltip>
-        </div>
+      </div>
+
+      <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: 'Active', value: data.overview.activeAffiliates, icon: UserCheck, tone: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10' },
+          { label: 'Suspicious', value: data.overview.suspiciousAffiliates, icon: ShieldAlert, tone: 'text-red-600 bg-red-50 dark:bg-red-500/10' },
+          { label: 'Disabled', value: data.overview.disabledAffiliates, icon: UserX, tone: 'text-amber-600 bg-amber-50 dark:bg-amber-500/10' },
+          { label: 'Unnamed', value: data.overview.unnamedAffiliates, icon: Search, tone: 'text-muted-foreground bg-muted' },
+        ].map(({ label, value, icon: Icon, tone }) => (
+          <Card key={label} className="flex-row items-center gap-3 p-4">
+            <span className={cn('flex size-9 items-center justify-center rounded-lg', tone)}><Icon className="size-4" /></span>
+            <div><p className="text-muted-foreground text-xs">{label}</p><p className="text-xl font-semibold tabular-nums">{value.toLocaleString()}</p></div>
+          </Card>
+        ))}
       </div>
 
       {/* Search */}
@@ -136,17 +137,18 @@ export default function AffiliatesPage() {
         ) : (
           <>
             <div className="overflow-x-auto">
-              <Table className="min-w-[1500px]">
+              <Table className="min-w-[1450px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="px-5">Affiliate</TableHead>
                     <TableHead title="Total referrals — anyone who clicked ?via=token (visitor + lead + paid)" className="cursor-pointer text-right select-none" onClick={() => handleSort('referrals')}>Clicks<SortIcon col="referrals" sortKey={sortKey} sortDir={sortDir} /></TableHead>
                     <TableHead title="Subset of clicks who created a Runable account (Rewardful lead + converted)" className="text-right">Signups</TableHead>
                     <TableHead title="Subset of signups who paid (first-time paid subscription = Rewardful 'converted')" className="cursor-pointer text-right select-none" onClick={() => handleSort('conversions')}>Paid<SortIcon col="conversions" sortKey={sortKey} sortDir={sortDir} /></TableHead>
-                    <TableHead title="Clicks today / Paid today" className="text-right">Today</TableHead>
                     <TableHead title="Paid / Clicks (Rewardful conversion rate)" className="text-right">Click→Pay</TableHead>
-                    <TableHead title="Median time between sign_up event and first paid subscription (FTS) for users attributed to this affiliate. Short = intercepted intent; long = healthy nurture." className="text-right">Signup→Pay</TableHead>
-                    <TableHead title="Similarity of Signup→Pay time to the Google brand-search baseline. 100% = identical to brand-intercept pattern (likely brand bidding); 0% = identical to organic/direct.">vs Google</TableHead>
+                    <TableHead title="PostHog pageviews carrying this affiliate token" className="cursor-pointer text-right select-none" onClick={() => handleSort('posthogPageviews')}>Pageviews<SortIcon col="posthogPageviews" sortKey={sortKey} sortDir={sortDir} /></TableHead>
+                    <TableHead title="PostHog signups attributed to this affiliate token" className="text-right">PH signups</TableHead>
+                    <TableHead title="PostHog first-time subscription events attributed to this affiliate" className="cursor-pointer text-right select-none" onClick={() => handleSort('posthogFts')}>FTS<SortIcon col="posthogFts" sortKey={sortKey} sortDir={sortDir} /></TableHead>
+                    <TableHead title="Share of PostHog signups carrying paid-ad click parameters" className="text-right">Ad share</TableHead>
                     <TableHead className="cursor-pointer text-right select-none" onClick={() => handleSort('revenueCents')}>Revenue<SortIcon col="revenueCents" sortKey={sortKey} sortDir={sortDir} /></TableHead>
                     <TableHead className="cursor-pointer text-right select-none" onClick={() => handleSort('commissionCents')}>Commission<SortIcon col="commissionCents" sortKey={sortKey} sortDir={sortDir} /></TableHead>
                     <TableHead title="Rewardful account status (active / inactive)">Status</TableHead>
@@ -154,7 +156,6 @@ export default function AffiliatesPage() {
                 </TableHeader>
                 <TableBody>
                   {paged.rows.map((a) => {
-                    const tts = ttsByAffiliateId.get(a.id);
                     return (
                       <TableRow key={a.id} className="cursor-pointer" onClick={() => setSelectedAffiliate(a)}>
                         <TableCell className="px-5 py-3">
@@ -197,24 +198,12 @@ export default function AffiliatesPage() {
                         <TableCell className="text-right tabular-nums">{a.referrals}</TableCell>
                         <TableCell className="text-right tabular-nums">{a.signups}</TableCell>
                         <TableCell className="text-right font-medium tabular-nums">{a.conversions}</TableCell>
-                        <TableCell className="text-right text-xs tabular-nums">
-                          <span className="font-semibold text-indigo-600 dark:text-indigo-400">{a.referralsToday}</span>
-                          <span className="text-muted-foreground mx-0.5">/</span>
-                          <span className="font-semibold text-emerald-600 dark:text-emerald-400">{a.conversionsToday}</span>
-                        </TableCell>
                         <TableCell className="text-muted-foreground text-right tabular-nums">{pct(a.conversions, a.referrals)}</TableCell>
-                        <TableCell className={cn('text-right tabular-nums', ttsTone(tts?.signupToFtsSecMedian ?? null))}>
-                          {tts ? fmtDuration(tts.signupToFtsSecMedian) : (ttsData ? '—' : <Skeleton className="ml-auto h-4 w-10" />)}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {tts && tts.googleSimilarity !== null && tts.googleSimilarity !== undefined ? (
-                            <div className="flex items-center gap-2">
-                              <div className="bg-muted h-1.5 w-16 overflow-hidden rounded-full">
-                                <div className={cn('h-full', similarityTone(tts.googleSimilarity))} style={{ width: `${Math.round(tts.googleSimilarity * 100)}%` }} />
-                              </div>
-                              <span className="text-muted-foreground text-[10px] tabular-nums">{Math.round(tts.googleSimilarity * 100)}%</span>
-                            </div>
-                          ) : <span className="text-muted-foreground">—</span>}
+                        <TableCell className="text-right tabular-nums">{a.posthogPageviews.toLocaleString()}</TableCell>
+                        <TableCell className="text-right tabular-nums">{a.posthogSignups.toLocaleString()}</TableCell>
+                        <TableCell className="text-right font-medium tabular-nums">{a.posthogFts.toLocaleString()}</TableCell>
+                        <TableCell className={cn('text-right tabular-nums', a.posthogSignups > 0 && a.adDrivenSignups / a.posthogSignups >= 0.8 && 'text-red-600 dark:text-red-400')}>
+                          {pct(a.adDrivenSignups, a.posthogSignups)}
                         </TableCell>
                         <TableCell className="text-right font-medium tabular-nums">{fmt(a.revenueCents)}</TableCell>
                         <TableCell className="text-right font-medium tabular-nums text-amber-600 dark:text-amber-400">{fmt(a.commissionCents)}</TableCell>

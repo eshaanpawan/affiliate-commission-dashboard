@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/db';
 import { isAuthed } from '@/lib/auth';
+import { dashboardRangeStart, isDashboardRange } from '@/lib/dashboard-range';
 
 export interface MonthlyRow {
   month: string; // 'YYYY-MM'
@@ -12,10 +13,14 @@ export interface MonthlyRow {
   netCents: number;
 }
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   if (!(await isAuthed(req))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const requestedRange = req.nextUrl.searchParams.get('period');
+  const range = isDashboardRange(requestedRange) ? requestedRange : 'all';
+  const cutoff = dashboardRangeStart(range);
 
   try {
     const rows = await sql`
@@ -23,6 +28,8 @@ export async function GET(req: Request) {
         SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS month,
                COUNT(*)::int AS visitors
         FROM referrals
+        WHERE status <> 'deleted'
+          AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
         GROUP BY 1
       ),
       leads AS (
@@ -30,6 +37,7 @@ export async function GET(req: Request) {
                COUNT(*)::int AS leads
         FROM referrals
         WHERE status IN ('lead', 'converted')
+          AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
         GROUP BY 1
       ),
       conversions AS (
@@ -37,12 +45,15 @@ export async function GET(req: Request) {
                COUNT(*)::int AS conversions
         FROM referrals
         WHERE status = 'converted'
+          AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
         GROUP BY 1
       ),
       sales AS (
         SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS month,
                COALESCE(SUM(amount_cents), 0)::bigint AS sales_cents
         FROM sales
+        WHERE status = 'created'
+          AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
         GROUP BY 1
       ),
       comms AS (
@@ -50,6 +61,7 @@ export async function GET(req: Request) {
                COALESCE(SUM(amount_cents), 0)::bigint AS commissions_cents
         FROM commissions
         WHERE status NOT IN ('voided', 'deleted')
+          AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
         GROUP BY 1
       )
       SELECT
@@ -100,7 +112,7 @@ export async function GET(req: Request) {
       { visitors: 0, leads: 0, conversions: 0, salesCents: 0, commissionsCents: 0, netCents: 0 },
     );
 
-    return NextResponse.json({ months, totals });
+    return NextResponse.json({ months, totals, meta: { range, from: cutoff, generatedAt: new Date().toISOString() } });
   } catch (err) {
     console.error('GET /api/monthly failed:', err);
     return NextResponse.json({ error: 'Failed to load monthly summary' }, { status: 500 });

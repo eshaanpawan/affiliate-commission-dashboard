@@ -5,17 +5,55 @@ import { useEffect, useState } from 'react';
 import { DayOnDayChart } from '@/components/DayOnDayChart';
 import { fmtCents as fmt, pct } from '@/lib/format';
 import type { Affiliate } from '@/lib/use-dashboard';
+import { useDashboardRange } from '@/components/DashboardRangeProvider';
+import { ChartRangeTabs } from '@/components/RangeTabs';
+import type { DashboardRange } from '@/lib/dashboard-range';
 
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
-import { Skeleton } from '@/components/ui/skeleton';
 
 interface AffiliateDetail {
   dailyReferrals: { day: string; total: number; converted: number }[];
   dailyRevenue: { day: string; usd: number }[];
   dailyCommissions: { day: string; usd: number }[];
+}
+
+const affiliateDetailCache = new Map<string, Promise<AffiliateDetail>>();
+
+function useAffiliateDetail(affiliateId: string, range: DashboardRange) {
+  const [detail, setDetail] = useState<AffiliateDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    const key = `${affiliateId}:${range}`;
+    let request = affiliateDetailCache.get(key);
+    if (!request) {
+      request = fetch(`/api/affiliates/${affiliateId}?period=${range}`, { cache: 'no-store' }).then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.error ?? 'Affiliate detail failed');
+        return payload as AffiliateDetail;
+      }).finally(() => affiliateDetailCache.delete(key));
+      affiliateDetailCache.set(key, request);
+    }
+    request.then((payload) => { if (!cancelled) setDetail(payload); }).catch(() => { if (!cancelled) setDetail(null); }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [affiliateId, range]);
+  return { detail, loading };
+}
+
+function AffiliateDetailChart({ affiliateId, title, dataKey, bars, valuePrefix }: {
+  affiliateId: string;
+  title: string;
+  dataKey: keyof AffiliateDetail;
+  bars: { key: string; color: string; label: string; axis?: 'left' | 'right' }[];
+  valuePrefix?: string;
+}) {
+  const { range: globalRange } = useDashboardRange();
+  const [rangeOverride, setRangeOverride] = useState<DashboardRange | null>(null);
+  const { detail, loading } = useAffiliateDetail(affiliateId, rangeOverride ?? globalRange);
+  return <DayOnDayChart title={title} data={(detail?.[dataKey] ?? []) as Record<string, unknown>[]} bars={bars} valuePrefix={valuePrefix} loading={loading} action={<ChartRangeTabs value={rangeOverride} globalRange={globalRange} onChange={setRangeOverride} />} />;
 }
 
 export function AffiliateModal({ affiliate, ftsCountries, ftsTotal, onClose }: {
@@ -24,16 +62,6 @@ export function AffiliateModal({ affiliate, ftsCountries, ftsTotal, onClose }: {
   ftsTotal: number;
   onClose: () => void;
 }) {
-  const [detail, setDetail] = useState<AffiliateDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetch(`/api/affiliates/${affiliate.id}`)
-      .then((r) => r.json())
-      .then((d) => { setDetail(d); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, [affiliate.id]);
-
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
@@ -67,29 +95,19 @@ export function AffiliateModal({ affiliate, ftsCountries, ftsTotal, onClose }: {
           </div>
         </div>
 
-        {loading ? (
-          <div className="space-y-4">
-            <Skeleton className="h-[260px] w-full" />
-            <div className="grid grid-cols-2 gap-4">
-              <Skeleton className="h-[260px] w-full" />
-              <Skeleton className="h-[260px] w-full" />
-            </div>
-          </div>
-        ) : !detail ? (
-          <div className="text-muted-foreground flex h-40 items-center justify-center text-sm">No data available.</div>
-        ) : (
-          <div className="space-y-4">
-            <DayOnDayChart
-              title="Referrals & Conversions (last 30 days)"
-              data={detail.dailyReferrals}
+        <div className="space-y-4">
+            <AffiliateDetailChart
+              affiliateId={affiliate.id}
+              title="Referrals & conversions"
+              dataKey="dailyReferrals"
               bars={[
                 { key: 'total', color: 'var(--chart-10)', label: 'Referrals', axis: 'left' },
                 { key: 'converted', color: 'var(--chart-2)', label: 'Conversions', axis: 'right' },
               ]}
             />
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <DayOnDayChart title="Revenue (last 30 days)" data={detail.dailyRevenue} bars={[{ key: 'usd', color: 'var(--chart-1)', label: 'Revenue' }]} valuePrefix="$" />
-              <DayOnDayChart title="Commissions (last 30 days)" data={detail.dailyCommissions} bars={[{ key: 'usd', color: 'var(--chart-3)', label: 'Commissions' }]} valuePrefix="$" />
+              <AffiliateDetailChart affiliateId={affiliate.id} title="Revenue" dataKey="dailyRevenue" bars={[{ key: 'usd', color: 'var(--chart-1)', label: 'Revenue' }]} valuePrefix="$" />
+              <AffiliateDetailChart affiliateId={affiliate.id} title="Commissions" dataKey="dailyCommissions" bars={[{ key: 'usd', color: 'var(--chart-3)', label: 'Commissions' }]} valuePrefix="$" />
             </div>
             {ftsCountries.length > 0 && (
               <Card className="gap-3">
@@ -118,7 +136,6 @@ export function AffiliateModal({ affiliate, ftsCountries, ftsTotal, onClose }: {
               </Card>
             )}
           </div>
-        )}
       </DialogContent>
     </Dialog>
   );

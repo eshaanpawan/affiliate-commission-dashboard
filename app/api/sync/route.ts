@@ -1,29 +1,47 @@
 import { NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
-import { getConversionCountriesByEmail } from '@/lib/posthog';
 import { extractTrafficFields } from '@/lib/fraud-detection';
+import { isAuthed } from '@/lib/auth';
 
 const sql = neon(process.env.NEON_DATABASE_URL!);
 const API_SECRET = process.env.REWARDFUL_API_SECRET!;
 const BASE_URL = 'https://api.getrewardful.com/v1';
 const authHeader = 'Basic ' + Buffer.from(API_SECRET + ':').toString('base64');
+export const maxDuration = 300;
+
+let nextRewardfulRequestAt = 0;
+
+async function rewardfulFetch(url: string): Promise<Response> {
+  const waitMs = Math.max(0, nextRewardfulRequestAt - Date.now());
+  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+  nextRewardfulRequestAt = Date.now() + 700;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetch(url, { headers: { Authorization: authHeader }, cache: 'no-store' });
+    if (response.status !== 429) return response;
+    const retryAfter = Number(response.headers.get('retry-after') ?? '2');
+    await new Promise((resolve) => setTimeout(resolve, Math.max(1, retryAfter) * 1000));
+  }
+  throw new Error('Rewardful rate limit did not clear after retries');
+}
 
 async function fetchRecent(path: string, cutoff: Date): Promise<Record<string, unknown>[]> {
   const results: Record<string, unknown>[] = [];
   let page = 1;
-  while (page <= 20) {
+  const serverFiltersUpdates = path.includes('updated_since=');
+  while (page <= 5_000) {
     const sep = path.includes('?') ? '&' : '?';
-    const res = await fetch(`${BASE_URL}${path}${sep}page=${page}&limit=100`, {
-      headers: { Authorization: authHeader },
-    });
-    if (!res.ok) break;
+    const res = await rewardfulFetch(`${BASE_URL}${path}${sep}page=${page}&limit=100`);
+    if (!res.ok) throw new Error(`Rewardful ${path} failed (${res.status})`);
     const json = await res.json() as { data: Record<string, unknown>[]; pagination: { total_pages: number } };
-    const recent = json.data.filter((r) => new Date(r.created_at as string) >= cutoff);
+    const recent = serverFiltersUpdates
+      ? json.data
+      : json.data.filter((r) => new Date(r.created_at as string) >= cutoff);
     results.push(...recent);
     const oldest = json.data[json.data.length - 1];
-    if (!oldest || new Date(oldest.created_at as string) < cutoff || page >= json.pagination.total_pages) break;
+    if (!oldest || page >= json.pagination.total_pages) break;
+    if (!serverFiltersUpdates && new Date(oldest.created_at as string) < cutoff) break;
     page++;
-    await new Promise((r) => setTimeout(r, 200));
   }
   return results;
 }
@@ -32,15 +50,12 @@ async function fetchAllAffiliates(): Promise<Record<string, unknown>[]> {
   const results: Record<string, unknown>[] = [];
   let page = 1;
   while (true) {
-    const res = await fetch(`${BASE_URL}/affiliates?page=${page}&limit=100&expand[]=links`, {
-      headers: { Authorization: authHeader },
-    });
-    if (!res.ok) break;
+    const res = await rewardfulFetch(`${BASE_URL}/affiliates?page=${page}&limit=100&expand[]=links&expand[]=commission_stats`);
+    if (!res.ok) throw new Error(`Rewardful affiliates failed (${res.status})`);
     const json = await res.json() as { data: Record<string, unknown>[]; pagination: { total_pages: number } };
     results.push(...json.data);
     if (page >= json.pagination.total_pages) break;
     page++;
-    await new Promise((r) => setTimeout(r, 200));
   }
   return results;
 }
@@ -51,7 +66,10 @@ function chunks<T>(arr: T[], size: number): T[][] {
   return result;
 }
 
-export async function POST() {
+export async function POST(req: Request) {
+  const bearer = req.headers.get('authorization');
+  const cronOk = !!process.env.CRON_SECRET && bearer === `Bearer ${process.env.CRON_SECRET}`;
+  if (!cronOk && !(await isAuthed(req))) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!API_SECRET) return NextResponse.json({ error: 'No API secret configured' }, { status: 500 });
 
   // Use 48h window to catch any data gaps from missed syncs
@@ -62,27 +80,47 @@ export async function POST() {
     const affiliates = await fetchAllAffiliates();
     const linkMap = new Map<string, string>();
 
+    if (affiliates.length > 0 && affiliates.every((affiliate) => !affiliate.commission_stats)) {
+      throw new Error('Rewardful did not return commission_stats expansion; sync stopped to avoid overwriting balances');
+    }
+
     if (affiliates.length > 0) {
       for (const batch of chunks(affiliates, 100)) {
-        const rows = batch.map((a) => [
-          a.id, a.first_name ?? null, a.last_name ?? null, a.email ?? null,
-          a.state ?? 'active', a.created_at ?? null, a.confirmed_at ?? null,
-          new Date().toISOString(), a.visitors ?? 0, a.leads ?? 0, a.conversions ?? 0,
-        ]);
+        const rows = batch.map((a) => {
+          const usd = (a.commission_stats as { currencies?: { USD?: { unpaid?: { cents?: number }; paid?: { cents?: number }; gross_revenue?: { cents?: number } } } })?.currencies?.USD;
+          return [
+            a.id, a.first_name ?? null, a.last_name ?? null, a.email ?? null,
+            a.state ?? 'active', a.created_at ?? null, a.confirmed_at ?? null,
+            new Date().toISOString(), a.visitors ?? 0, a.leads ?? 0, a.conversions ?? 0,
+            usd?.unpaid?.cents ?? 0, usd?.paid?.cents ?? 0, usd?.gross_revenue?.cents ?? 0,
+          ];
+        });
         await sql`
-          INSERT INTO affiliates (rewardful_id, first_name, last_name, email, status, created_at, confirmed_at, updated_at, visitors, leads, conversions)
+          INSERT INTO affiliates (
+            rewardful_id, first_name, last_name, email, status, created_at, confirmed_at,
+            updated_at, visitors, leads, conversions, unpaid_commission_cents,
+            paid_commission_cents, gross_revenue_cents
+          )
           SELECT * FROM unnest(
             ${rows.map(r => r[0])}::text[], ${rows.map(r => r[1])}::text[],
             ${rows.map(r => r[2])}::text[], ${rows.map(r => r[3])}::text[],
             ${rows.map(r => r[4])}::text[], ${rows.map(r => r[5])}::timestamptz[],
             ${rows.map(r => r[6])}::timestamptz[], ${rows.map(r => r[7])}::timestamptz[],
-            ${rows.map(r => r[8])}::int[], ${rows.map(r => r[9])}::int[], ${rows.map(r => r[10])}::int[]
-          ) AS t(rewardful_id, first_name, last_name, email, status, created_at, confirmed_at, updated_at, visitors, leads, conversions)
+            ${rows.map(r => r[8])}::int[], ${rows.map(r => r[9])}::int[], ${rows.map(r => r[10])}::int[],
+            ${rows.map(r => r[11])}::int[], ${rows.map(r => r[12])}::int[], ${rows.map(r => r[13])}::int[]
+          ) AS t(
+            rewardful_id, first_name, last_name, email, status, created_at, confirmed_at,
+            updated_at, visitors, leads, conversions, unpaid_commission_cents,
+            paid_commission_cents, gross_revenue_cents
+          )
           ON CONFLICT (rewardful_id) DO UPDATE SET
             first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name,
             email = EXCLUDED.email, status = EXCLUDED.status,
             confirmed_at = EXCLUDED.confirmed_at, updated_at = EXCLUDED.updated_at,
-            visitors = EXCLUDED.visitors, leads = EXCLUDED.leads, conversions = EXCLUDED.conversions
+            visitors = EXCLUDED.visitors, leads = EXCLUDED.leads, conversions = EXCLUDED.conversions,
+            unpaid_commission_cents = EXCLUDED.unpaid_commission_cents,
+            paid_commission_cents = EXCLUDED.paid_commission_cents,
+            gross_revenue_cents = EXCLUDED.gross_revenue_cents
         `;
       }
 
@@ -92,17 +130,25 @@ export async function POST() {
           linkMap.set(l.id, a.id as string);
         }
       }
+
+      const sourceIds = affiliates.map((affiliate) => String(affiliate.id));
+      await sql`
+        UPDATE affiliates
+        SET status = 'deleted', updated_at = NOW()
+        WHERE status <> 'deleted' AND NOT (rewardful_id = ANY(${sourceIds}::text[]))
+      `;
     }
 
     // Sync referrals (last 48h). NOTE: Rewardful only supports expand[]=affiliate on
     // the list endpoint — customer/visits cannot be expanded here. We get those via
     // webhooks (real-time) or individual /referrals/{id} fetches for suspects.
-    const referrals = await fetchRecent('/referrals', cutoff);
+    const referrals = await fetchRecent(`/referrals?updated_since=${encodeURIComponent(cutoff.toISOString())}&expand[]=affiliate`, cutoff);
     if (referrals.length > 0) {
       for (const batch of chunks(referrals, 100)) {
         const rows = batch.map((r) => {
           const linkId = (r.link as { id: string } | null)?.id ?? null;
-          const affiliateId = linkId ? (linkMap.get(linkId) ?? null) : null;
+          const expandedAffiliateId = (r.affiliate as { id?: string } | null)?.id ?? null;
+          const affiliateId = expandedAffiliateId ?? (linkId ? (linkMap.get(linkId) ?? null) : null);
           const isConversion = r.conversion_state === 'conversion';
           const isLead = r.conversion_state === 'lead';
           const status = isConversion ? 'converted' : isLead ? 'lead' : 'visitor';
@@ -166,35 +212,6 @@ export async function POST() {
       }
     }
 
-    // Enrich converted referrals with country data from PostHog
-    let countriesEnriched = 0;
-    try {
-      const countryMap = await getConversionCountriesByEmail();
-      if (countryMap.size > 0) {
-        const toEnrich = await sql`
-          SELECT rewardful_id, customer_email
-          FROM referrals
-          WHERE status = 'converted'
-            AND country_code IS NULL
-            AND customer_email IS NOT NULL
-        `;
-        for (const row of toEnrich) {
-          const email = (row.customer_email as string).toLowerCase();
-          const country = countryMap.get(email);
-          if (country) {
-            await sql`
-              UPDATE referrals
-              SET country_code = ${country.country_code}, country_name = ${country.country_name}
-              WHERE rewardful_id = ${row.rewardful_id as string}
-            `;
-            countriesEnriched++;
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[sync] Country enrichment failed (non-fatal):', err);
-    }
-
     // Sync sales (last 48h)
     const sales = await fetchRecent('/sales', cutoff);
     if (sales.length > 0) {
@@ -244,56 +261,49 @@ export async function POST() {
       }
     }
 
-    // Refresh commission stats for all affiliates using their commission_stats from Rewardful
-    // We already have all affiliates fetched above — use that data directly if commission_stats is present,
-    // otherwise fall back to individual API calls for affiliates missing the field.
-    let commissionStatsUpdated = 0;
-    const affiliatesNeedingStats = affiliates.filter(a => !(a.commission_stats));
-
-    // Update from the full list first (commission_stats may be included in list response)
-    for (const batch of chunks(affiliates, 100)) {
-      const withStats = batch.filter(a => a.commission_stats);
-      if (withStats.length === 0) continue;
-      for (const a of withStats) {
-        const stats = (a.commission_stats as { currencies?: { USD?: { unpaid?: { cents?: number }; paid?: { cents?: number }; gross_revenue?: { cents?: number } } } })?.currencies?.USD;
-        const unpaid = stats?.unpaid?.cents ?? 0;
-        const paid = stats?.paid?.cents ?? 0;
-        const gross = stats?.gross_revenue?.cents ?? 0;
+    const payouts = await fetchRecent('/payouts', cutoff);
+    if (payouts.length > 0) {
+      for (const batch of chunks(payouts, 100)) {
+        const rows = batch.map((p) => [
+          p.id,
+          (p.affiliate as { id?: string } | null)?.id ?? null,
+          p.amount ?? 0,
+          String(p.currency ?? 'usd').toLowerCase(),
+          p.paid_at ? 'paid' : p.failed_at ? 'failed' : p.state ?? (p.due_at ? 'due' : 'created'),
+          p.created_at ?? null,
+          p.paid_at ?? null,
+        ]);
         await sql`
-          UPDATE affiliates
-          SET unpaid_commission_cents = ${unpaid}, paid_commission_cents = ${paid}, gross_revenue_cents = ${gross}
-          WHERE rewardful_id = ${a.id as string}
+          INSERT INTO payouts (rewardful_id, affiliate_id, amount_cents, currency, status, created_at, paid_at)
+          SELECT * FROM unnest(
+            ${rows.map(r => r[0])}::text[], ${rows.map(r => r[1])}::text[],
+            ${rows.map(r => r[2])}::int[], ${rows.map(r => r[3])}::text[],
+            ${rows.map(r => r[4])}::text[], ${rows.map(r => r[5])}::timestamptz[],
+            ${rows.map(r => r[6])}::timestamptz[]
+          ) AS t(rewardful_id, affiliate_id, amount_cents, currency, status, created_at, paid_at)
+          ON CONFLICT (rewardful_id) DO UPDATE SET
+            affiliate_id = COALESCE(EXCLUDED.affiliate_id, payouts.affiliate_id),
+            amount_cents = EXCLUDED.amount_cents,
+            status = EXCLUDED.status,
+            paid_at = COALESCE(EXCLUDED.paid_at, payouts.paid_at)
         `;
-        commissionStatsUpdated++;
       }
     }
 
-    // For affiliates without commission_stats in list response, fetch individually
-    for (const a of affiliatesNeedingStats) {
-      const affRes = await fetch(`${BASE_URL}/affiliates/${a.id as string}`, {
-        headers: { Authorization: authHeader },
-      });
-      if (!affRes.ok) { await new Promise(r => setTimeout(r, 200)); continue; }
-      const affData = await affRes.json() as Record<string, unknown>;
-      const stats = (affData.commission_stats as { currencies?: { USD?: { unpaid?: { cents?: number }; paid?: { cents?: number }; gross_revenue?: { cents?: number } } } })?.currencies?.USD;
-      const unpaid = stats?.unpaid?.cents ?? 0;
-      const paid = stats?.paid?.cents ?? 0;
-      const gross = stats?.gross_revenue?.cents ?? 0;
-      await sql`
-        UPDATE affiliates
-        SET unpaid_commission_cents = ${unpaid}, paid_commission_cents = ${paid}, gross_revenue_cents = ${gross}
-        WHERE rewardful_id = ${a.id as string}
-      `;
-      commissionStatsUpdated++;
-      await new Promise(r => setTimeout(r, 100));
-    }
-
     return NextResponse.json({
-      synced: { affiliates: affiliates.length, referrals: referrals.length, sales: sales.length, commissions: commissions.length, commissionStatsUpdated, countriesEnriched },
+      message: `Updated ${affiliates.length.toLocaleString()} affiliates and ${referrals.length.toLocaleString()} changed referrals.`,
+      synced: {
+        affiliates: affiliates.length,
+        referrals: referrals.length,
+        sales: sales.length,
+        commissions: commissions.length,
+        payouts: payouts.length,
+        commissionStatsUpdated: affiliates.filter((affiliate) => affiliate.commission_stats).length,
+      },
       syncedAt: new Date().toISOString(),
     });
   } catch (err) {
     console.error('Sync error:', err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'Rewardful sync failed' }, { status: 500 });
   }
 }

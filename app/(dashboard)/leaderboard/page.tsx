@@ -1,13 +1,15 @@
 'use client';
 
 import { useState } from 'react';
-import { RefreshCw } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 
 import { useDashboard, paginate } from '@/lib/use-dashboard';
+import { useDashboardRange } from '@/components/DashboardRangeProvider';
+import { ChartRangeTabs } from '@/components/RangeTabs';
+import type { DashboardRange } from '@/lib/dashboard-range';
 import { Pager } from '@/components/Pager';
 import { SectionCard } from '@/components/SectionCard';
-import { TopAffiliatesPie } from '@/components/TopAffiliatesPie';
+import { DashboardTopAffiliatesPie } from '@/components/DashboardTopAffiliatesPie';
 import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
@@ -16,6 +18,40 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 const PER_PAGE = 15;
+
+function LeaderboardChart() {
+  const { range: globalRange } = useDashboardRange();
+  const [rangeOverride, setRangeOverride] = useState<DashboardRange | null>(null);
+  const { data, loading } = useDashboard(rangeOverride);
+
+  return (
+    <div className="border-b p-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-sm font-medium">Attributed activity ranking</p>
+        <ChartRangeTabs value={rangeOverride} globalRange={globalRange} onChange={setRangeOverride} />
+      </div>
+      {loading || !data ? <Skeleton className="h-[260px] w-full" /> : (
+        <ChartContainer
+          config={{
+            conversionsThisWeek: { label: 'Conversions', color: 'var(--chart-2)' },
+            referralsThisWeek: { label: 'Referrals', color: 'var(--chart-1)' },
+          }}
+          className="h-[260px] w-full"
+        >
+          <BarChart data={data.weeklyLeaderboard.slice(0, 10)} layout="vertical" margin={{ top: 0, right: 8, left: 8, bottom: 0 }}>
+            <CartesianGrid horizontal={false} strokeDasharray="3 3" />
+            <XAxis type="number" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} allowDecimals={false} />
+            <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} width={140} tickFormatter={(value: string) => value.length > 18 ? `${value.slice(0, 18)}…` : value} />
+            <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
+            <ChartLegend content={<ChartLegendContent />} />
+            <Bar dataKey="conversionsThisWeek" fill="var(--color-conversionsThisWeek)" radius={[0, 3, 3, 0]} />
+            <Bar dataKey="referralsThisWeek" fill="var(--color-referralsThisWeek)" radius={[0, 3, 3, 0]} />
+          </BarChart>
+        </ChartContainer>
+      )}
+    </div>
+  );
+}
 
 export default function LeaderboardPage() {
   const { data, loading, refresh } = useDashboard();
@@ -54,13 +90,9 @@ export default function LeaderboardPage() {
       {/* Header */}
       <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Leaderboard</h1>
-          <p className="text-muted-foreground mt-1 text-sm">Top affiliates and this week&apos;s ranking</p>
+          <h1 className="text-2xl font-bold">Leaderboard</h1>
+          <p className="text-muted-foreground mt-1 text-sm">Top affiliates ranked inside the selected reporting window</p>
         </div>
-        <Button size="sm" onClick={() => refresh()} disabled={loading}>
-          <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </Button>
       </div>
 
       {/* Top Affiliates */}
@@ -72,61 +104,31 @@ export default function LeaderboardPage() {
         onOpenChange={setTopAffiliatesExpanded}
       >
         <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2">
-          <TopAffiliatesPie title="Top Affiliates by Referrals" data={data.topByReferrals} label="referrals" />
-          <TopAffiliatesPie title="Top Affiliates by Conversions" data={data.topByConversions} label="conversions" />
+          <DashboardTopAffiliatesPie title="Top Affiliates by Referrals" dataKey="topByReferrals" label="referrals" />
+          <DashboardTopAffiliatesPie title="Top Affiliates by Conversions" dataKey="topByConversions" label="conversions" />
         </div>
       </SectionCard>
 
-      {/* Weekly leaderboard */}
+      {/* Range leaderboard */}
       <SectionCard
         className="mb-8"
-        title="Weekly Leaderboard"
-        description="Top affiliates by conversions this week (Mon–Sun)"
+        title="Range Leaderboard"
+        description="Top affiliates by conversions in the global reporting window"
         open={leaderboardExpanded}
         onOpenChange={setLeaderboardExpanded}
       >
         {data.weeklyLeaderboard.length === 0 ? (
-          <div className="text-muted-foreground p-8 text-center text-sm">No conversions this week yet.</div>
+          <div className="text-muted-foreground p-8 text-center text-sm">No attributed activity in this reporting window.</div>
         ) : (
           <>
-          <div className="border-b p-5">
-            <ChartContainer
-              config={{
-                conversionsThisWeek: { label: 'Conversions', color: 'var(--chart-2)' },
-                referralsThisWeek: { label: 'Referrals', color: 'var(--chart-1)' },
-              }}
-              className="h-[260px] w-full"
-            >
-              <BarChart
-                data={data.weeklyLeaderboard.slice(0, 10)}
-                layout="vertical"
-                margin={{ top: 0, right: 8, left: 8, bottom: 0 }}
-              >
-                <CartesianGrid horizontal={false} strokeDasharray="3 3" />
-                <XAxis type="number" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} allowDecimals={false} />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fontSize: 11 }}
-                  width={140}
-                  tickFormatter={(v: string) => (v.length > 18 ? v.slice(0, 18) + '…' : v)}
-                />
-                <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
-                <ChartLegend content={<ChartLegendContent />} />
-                <Bar dataKey="conversionsThisWeek" fill="var(--color-conversionsThisWeek)" radius={[0, 3, 3, 0]} />
-                <Bar dataKey="referralsThisWeek" fill="var(--color-referralsThisWeek)" radius={[0, 3, 3, 0]} />
-              </BarChart>
-            </ChartContainer>
-          </div>
+          <LeaderboardChart />
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="px-5">Rank</TableHead>
                 <TableHead>Affiliate</TableHead>
-                <TableHead className="text-right">Conversions This Week</TableHead>
-                <TableHead className="px-5 text-right">Referrals This Week</TableHead>
+                <TableHead className="text-right">Conversions</TableHead>
+                <TableHead className="px-5 text-right">Referrals</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

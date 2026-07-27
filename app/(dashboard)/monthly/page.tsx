@@ -2,17 +2,18 @@
 
 import * as React from 'react';
 import { useState } from 'react';
-import { RefreshCw } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 
 import { useDashboard } from '@/lib/use-dashboard';
+import { useDashboardRange } from '@/components/DashboardRangeProvider';
+import { ChartRangeTabs } from '@/components/RangeTabs';
+import type { DashboardRange } from '@/lib/dashboard-range';
 import { MonthlySummary } from '@/components/MonthlySummary';
 import { SectionCard } from '@/components/SectionCard';
 import { fmtCents as fmt, pct } from '@/lib/format';
-import { cn } from '@/lib/utils';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent } from '@/components/ui/chart';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -26,6 +27,43 @@ const MONTHLY_MONEY_CONFIG = {
   revenue: { label: 'Revenue', color: 'var(--chart-1)' },
   commissions: { label: 'Commissions', color: 'var(--chart-3)' },
 } satisfies ChartConfig;
+
+function MonthlyRangeChart({ kind }: { kind: 'counts' | 'money' }) {
+  const { range: globalRange } = useDashboardRange();
+  const [rangeOverride, setRangeOverride] = useState<DashboardRange | null>(null);
+  const { data, loading } = useDashboard(rangeOverride);
+  const rows = data?.monthly ?? [];
+  const formatted = rows.map((month) => ({
+    month: new Date(`${month.month}-02`).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+    conversions: month.conversions,
+    referrals: month.referrals,
+    revenue: month.revenueCents / 100,
+    commissions: month.commissionCents / 100,
+  }));
+
+  return (
+    <Card className="gap-4">
+      <CardHeader>
+        <CardTitle className="text-sm">{kind === 'counts' ? 'Conversions by acquisition month' : 'Revenue vs commissions'}</CardTitle>
+        <CardAction><ChartRangeTabs value={rangeOverride} globalRange={globalRange} onChange={setRangeOverride} /></CardAction>
+      </CardHeader>
+      <CardContent>
+        {loading ? <Skeleton className="h-[200px] w-full" /> : (
+          <ChartContainer config={kind === 'counts' ? MONTHLY_COUNT_CONFIG : MONTHLY_MONEY_CONFIG} className="h-[200px] w-full">
+            <BarChart data={formatted} margin={{ top: 4, right: 4, left: kind === 'counts' ? -18 : -10, bottom: 0 }}>
+              <CartesianGrid vertical={false} strokeDasharray="3 3" />
+              <XAxis dataKey="month" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickMargin={8} />
+              <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickFormatter={kind === 'money' ? (value: number) => `$${value}` : undefined} width={kind === 'money' ? 56 : 48} />
+              <ChartTooltip cursor={false} content={<ChartTooltipContent formatter={kind === 'money' ? (value, name) => [`$${Number(value).toFixed(2)}`, MONTHLY_MONEY_CONFIG[name as keyof typeof MONTHLY_MONEY_CONFIG]?.label ?? name] as unknown as React.ReactNode : undefined} />} />
+              <ChartLegend content={<ChartLegendContent />} />
+              {kind === 'counts' ? <><Bar dataKey="conversions" fill="var(--color-conversions)" radius={[3, 3, 0, 0]} /><Bar dataKey="referrals" fill="var(--color-referrals)" radius={[3, 3, 0, 0]} /></> : <><Bar dataKey="revenue" fill="var(--color-revenue)" radius={[3, 3, 0, 0]} /><Bar dataKey="commissions" fill="var(--color-commissions)" radius={[3, 3, 0, 0]} /></>}
+            </BarChart>
+          </ChartContainer>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function MonthlyPage() {
   const { data, loading, refresh } = useDashboard();
@@ -59,13 +97,9 @@ export default function MonthlyPage() {
       {/* Header */}
       <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Monthly</h1>
+          <h1 className="text-2xl font-bold">Monthly</h1>
           <p className="text-muted-foreground mt-1 text-sm">Month-by-month referrals, conversions, revenue and commissions</p>
         </div>
-        <Button size="sm" onClick={() => refresh()} disabled={loading}>
-          <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </Button>
       </div>
 
       <div className="mb-8">
@@ -82,38 +116,8 @@ export default function MonthlyPage() {
           onOpenChange={setMonthlyExpanded}
         >
           <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2">
-            <Card className="gap-4">
-              <CardHeader><CardTitle className="text-sm">Conversions per Month</CardTitle></CardHeader>
-              <CardContent>
-                <ChartContainer config={MONTHLY_COUNT_CONFIG} className="h-[200px] w-full">
-                  <BarChart data={data.monthly.map(m => ({ month: new Date(m.month + '-02').toLocaleDateString('en-US', { month: 'short', year: '2-digit' }), conversions: m.conversions, referrals: m.referrals }))} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
-                    <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                    <XAxis dataKey="month" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickMargin={8} />
-                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} width={48} />
-                    <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
-                    <ChartLegend content={<ChartLegendContent />} />
-                    <Bar dataKey="conversions" fill="var(--color-conversions)" radius={[3, 3, 0, 0]} />
-                    <Bar dataKey="referrals" fill="var(--color-referrals)" radius={[3, 3, 0, 0]} />
-                  </BarChart>
-                </ChartContainer>
-              </CardContent>
-            </Card>
-            <Card className="gap-4">
-              <CardHeader><CardTitle className="text-sm">Revenue vs Commissions per Month</CardTitle></CardHeader>
-              <CardContent>
-                <ChartContainer config={MONTHLY_MONEY_CONFIG} className="h-[200px] w-full">
-                  <BarChart data={data.monthly.map(m => ({ month: new Date(m.month + '-02').toLocaleDateString('en-US', { month: 'short', year: '2-digit' }), revenue: m.revenueCents / 100, commissions: m.commissionCents / 100 }))} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
-                    <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                    <XAxis dataKey="month" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickMargin={8} />
-                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} tickFormatter={(v: number) => `$${v}`} width={56} />
-                    <ChartTooltip cursor={false} content={<ChartTooltipContent formatter={(v, name) => [`$${Number(v).toFixed(2)}`, MONTHLY_MONEY_CONFIG[name as keyof typeof MONTHLY_MONEY_CONFIG]?.label ?? name] as unknown as React.ReactNode} />} />
-                    <ChartLegend content={<ChartLegendContent />} />
-                    <Bar dataKey="revenue" fill="var(--color-revenue)" radius={[3, 3, 0, 0]} />
-                    <Bar dataKey="commissions" fill="var(--color-commissions)" radius={[3, 3, 0, 0]} />
-                  </BarChart>
-                </ChartContainer>
-              </CardContent>
-            </Card>
+            <MonthlyRangeChart kind="counts" />
+            <MonthlyRangeChart kind="money" />
           </div>
           <div className="overflow-x-auto border-t">
             <Table>

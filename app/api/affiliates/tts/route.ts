@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import sql from '@/lib/db';
-import { getFunnelTimingsForFTS, getFunnelCountsBySource, getSignupsByViaToken, getPageviewsByViaToken, getFtsByViaToken, getCountriesByViaToken, FunnelTiming } from '@/lib/posthog';
+import { getFunnelTimingsForFTS, getFunnelCountsBySource, FunnelTiming } from '@/lib/posthog';
+import { isAuthed } from '@/lib/auth';
 
 // PostHog HogQL queries can take 15-30s for a 2-month window — beyond the
 // default 10s Vercel limit. Set explicit 60s ceiling.
@@ -23,8 +24,9 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 //   - 'affiliate'   : customer email matches a Rewardful referral
 //   - 'other'       : everything else
 //
-// If an affiliate's Signup→FTS time matches the Google baseline, they are
-// almost certainly intercepting Google brand-search traffic (brand bidding).
+// Similar timing to the Google baseline is a review-prioritization signal. It
+// is not proof that an affiliate placed an ad; the War Room combines it with
+// campaign overlap, URL evidence, geography, and payout exposure.
 
 function median(nums: number[]): number | null {
   const f = nums.filter(n => isFinite(n));
@@ -75,10 +77,15 @@ function isGoogleBrandSearch(t: FunnelTiming): boolean {
 
 function rateOrNull(n: number, d: number | null): number | null {
   if (d === null || d === 0) return null;
+  // Server-side signup events can exist without a client-side pageview inside
+  // the same reporting window. That is an instrumentation coverage gap, not a
+  // conversion rate above 100%, so leave the rate unreported.
+  if (n > d) return null;
   return n / d;
 }
 
 export async function GET(req: NextRequest) {
+  if (!(await isAuthed(req))) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const sp = req.nextUrl.searchParams;
   // Default = all-time (Runable's earliest data starts late 2025; 2027 is a future ceiling)
   const fromStr = sp.get('from') ?? '2025-01-01';
@@ -92,24 +99,46 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(cached.data);
   }
 
-  // 1. Pull FTS-window funnel timings + group counts + per-token signups + pageviews + FTS + countries in parallel
-  const [timings, sourceCounts, signupsByToken, pageviewsByToken, ftsByToken, countriesByToken] = await Promise.all([
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from >= to) {
+    return NextResponse.json({ error: 'Invalid date window' }, { status: 400 });
+  }
+  if (to.getTime() - from.getTime() > 730 * 86_400_000) {
+    return NextResponse.json({ error: 'Date window cannot exceed two years' }, { status: 400 });
+  }
+
+  // Raw event sequencing is intentionally limited to two HogQL queries. Token
+  // counts come from the daily PostHog materialization populated by the cron.
+  // This avoids six concurrent warehouse scans and the intermittent 504/empty
+  // responses that previously poisoned the browser cache.
+  const [timings, sourceCounts, trafficRows, trafficFreshnessRows] = await Promise.all([
     getFunnelTimingsForFTS(from, to),
     getFunnelCountsBySource(from, to),
-    getSignupsByViaToken(from, to),
-    getPageviewsByViaToken(from, to),
-    getFtsByViaToken(from, to),
-    getCountriesByViaToken(from, to),
+    sql`
+      SELECT via_token,
+        COALESCE(SUM(signups), 0) AS signups,
+        COALESCE(SUM(pageviews), 0) AS pageviews,
+        COALESCE(SUM(fts), 0) AS fts
+      FROM affiliate_traffic
+      WHERE day >= ${from.toISOString()}::date
+        AND day < ${to.toISOString()}::date
+      GROUP BY via_token
+    `,
+    sql`
+      SELECT MAX(day) AS data_through, MAX(synced_at) AS last_materialized_at
+      FROM affiliate_traffic
+      WHERE day >= ${from.toISOString()}::date
+        AND day < ${to.toISOString()}::date
+    `,
   ]);
 
-  if (timings.length === 0) {
-    // Don't cache this — it's a transient failure (timeout etc).
-    return NextResponse.json({
-      window: { from: from.toISOString(), to: to.toISOString() },
-      baselines: [],
-      affiliates: [],
-      note: 'PostHog returned 0 funnel rows for this window. Either no FTS events occurred, env vars are missing, or the HogQL query errored — check server logs.',
-    });
+  const signupsByToken = new Map<string, number>();
+  const pageviewsByToken = new Map<string, number>();
+  const ftsByToken = new Map<string, number>();
+  for (const row of trafficRows) {
+    const token = String(row.via_token);
+    signupsByToken.set(token, Number(row.signups));
+    pageviewsByToken.set(token, Number(row.pageviews));
+    ftsByToken.set(token, Number(row.fts));
   }
 
   // 2. Resolve all via_tokens (from ftsByToken / signupsByToken / pageviewsByToken)
@@ -155,6 +184,29 @@ export async function GET(req: NextRequest) {
     WHERE a.rewardful_id = ANY(${affiliateIds}::text[])
   `) as unknown as AffiliateRow[];
   const affMap = new Map(affRows.map(a => [a.rewardful_id, a]));
+
+  const countryRows = affiliateIds.length === 0 ? [] : await sql`
+    SELECT affiliate_id, country_code, country_name, COUNT(*) AS conversions
+    FROM referrals
+    WHERE affiliate_id = ANY(${affiliateIds}::text[])
+      AND status = 'converted'
+      AND country_code IS NOT NULL
+      AND created_at >= ${from.toISOString()}::timestamptz
+      AND created_at < ${to.toISOString()}::timestamptz
+    GROUP BY affiliate_id, country_code, country_name
+    ORDER BY conversions DESC
+  `;
+  const countriesByAffiliate = new Map<string, { code: string; name: string; count: number }[]>();
+  for (const row of countryRows) {
+    const affiliateId = String(row.affiliate_id);
+    const list = countriesByAffiliate.get(affiliateId) ?? [];
+    list.push({
+      code: String(row.country_code),
+      name: String(row.country_name ?? row.country_code),
+      count: Number(row.conversions),
+    });
+    countriesByAffiliate.set(affiliateId, list);
+  }
 
   // 3. Classify and bucket — for the per-user timings (used to compute median
   // Signup→FTS time and similarity vs Google), we still attribute by email to
@@ -260,18 +312,7 @@ export async function GET(req: NextRequest) {
       similarity = total === 0 ? 0.5 : dR / total;
     }
 
-    // Country breakdown of FTS users for this affiliate, from PostHog person-level
-    // geo (server-side events have $geoip_disable=true so we can't use event geo).
-    // Merge country counts across all of this affiliate's tokens.
-    const countryAgg = new Map<string, { code: string; name: string; count: number }>();
-    for (const tk of tokens) {
-      for (const c of countriesByToken.get(tk) ?? []) {
-        const cur = countryAgg.get(c.code);
-        if (cur) cur.count += c.count;
-        else countryAgg.set(c.code, { ...c });
-      }
-    }
-    const countries = [...countryAgg.values()].sort((a, b) => b.count - a.count);
+    const countries = countriesByAffiliate.get(affId) ?? [];
 
     affiliateRows.push({
       label: [aff.first_name, aff.last_name].filter(Boolean).join(' ') || aff.email || '?',
@@ -282,7 +323,7 @@ export async function GET(req: NextRequest) {
       pageviews: phPageviews,
       signups: phSignups,
       fts: phFts,  // via_token attribution — consistent with signups + pageviews
-      pvToSignupRate: null,
+      pvToSignupRate: rateOrNull(phSignups, phPageviews),
       signupToFtsRate: suToFtsRate,
       signupToFtsSecMedian: med,
       googleSimilarity: similarity,
@@ -305,7 +346,8 @@ export async function GET(req: NextRequest) {
 
   const payload = {
     window: { from: from.toISOString(), to: to.toISOString() },
-    totalFts: timings.length,
+    generatedAt: new Date().toISOString(),
+    totalFts: sourceCounts.google.fts + sourceCounts.other.fts,
     overall: {
       signupToFtsSecMedian: overallSignupToFts,
       googleSignupToFtsSecMedian: googleSignupToFts,
@@ -319,9 +361,28 @@ export async function GET(req: NextRequest) {
     },
     baselines: [googleRow, restRow],
     affiliates: affiliateRows,
+    quality: {
+      materializedTokens: allTokens.length,
+      resolvedTokens: tokenAffRows.length,
+      tokenCoveragePct: allTokens.length > 0 ? tokenAffRows.length / allTokens.length : null,
+      timingRows: timings.length,
+      affiliateTimingMatches: [...byAffiliate.values()].reduce((sum, rows) => sum + rows.length, 0),
+      affiliateAttributedFts: affiliateRows.reduce((sum, row) => sum + row.fts, 0),
+      dataThrough: trafficFreshnessRows[0]?.data_through
+        ? new Date(trafficFreshnessRows[0].data_through as string | Date).toISOString()
+        : null,
+      lastMaterializedAt: trafficFreshnessRows[0]?.last_materialized_at
+        ? new Date(trafficFreshnessRows[0].last_materialized_at as string | Date).toISOString()
+        : null,
+    },
   };
-  // Only cache non-empty responses — otherwise a transient PostHog failure
-  // poisons the cache for 5 min and every user sees blank metrics.
+  if (timings.length === 0 && (sourceCounts.google.fts + sourceCounts.other.fts) > 0) {
+    Object.assign(payload, {
+      note: 'Counts loaded from the PostHog daily materialization, but raw timing analysis is temporarily unavailable. Retry to restore median time and Google-similarity scores.',
+    });
+  }
+  // Cache only when the live timing query is healthy. Materialized counts remain
+  // useful on a transient failure, but that degraded result must not linger.
   if (timings.length > 0) {
     CACHE.set(cacheKey, { at: Date.now(), data: payload });
   }

@@ -753,7 +753,7 @@ export default function FraudPage() {
               <Link href="/"><ArrowLeft className="size-3.5" /> Dashboard</Link>
             </Button>
             <span className="text-muted-foreground">/</span>
-            <h1 className="text-2xl font-bold tracking-tight">Brand-Bidding &amp; Fraud Audit</h1>
+            <h1 className="text-2xl font-bold">Brand-Bidding &amp; Fraud Audit</h1>
           </div>
           <p className="text-muted-foreground text-sm">Identify affiliates running brand-keyword ads, intercepting buyer-intent traffic, or otherwise faking referrals.</p>
         </div>

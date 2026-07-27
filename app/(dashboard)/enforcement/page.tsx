@@ -121,7 +121,7 @@ export default function EnforcementPage() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+          <h1 className="flex items-center gap-2 text-2xl font-bold">
             <ScrollText className="size-6" /> Enforcement
           </h1>
           <p className="text-muted-foreground text-sm">

@@ -5,7 +5,9 @@
 // uses this instead of re-implementing the fetch + localStorage hydration
 // that used to live inline in the old single-page dashboard.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useDashboardRange } from '@/components/DashboardRangeProvider';
+import type { DashboardRange } from '@/lib/dashboard-range';
 
 export interface Affiliate {
   id: string;
@@ -23,6 +25,10 @@ export interface Affiliate {
   linkToken: string | null;
   linkTokens: { token: string; count: number }[];
   fraudTags: string[];
+  posthogPageviews: number;
+  posthogSignups: number;
+  posthogFts: number;
+  adDrivenSignups: number;
 }
 
 export interface DashboardData {
@@ -32,9 +38,14 @@ export interface DashboardData {
     totalReferrals: number;
     convertedReferrals: number;
     totalRevenueCents: number;
+    earningAffiliates: number;
     totalCommissionCents: number;
     paidCommissionCents: number;
     pendingPayoutCents: number;
+    suspiciousAffiliates: number;
+    disabledAffiliates: number;
+    unnamedAffiliates: number;
+    newAffiliates: number;
   };
   charts: {
     dailyAffiliates: { day: string; count: number }[];
@@ -56,6 +67,16 @@ export interface DashboardData {
   weeklyLeaderboard: { rank: number; name: string; email: string; conversionsThisWeek: number; referralsThisWeek: number }[];
   countriesByConversions: { country_code: string; country_name: string; conversions: number }[];
   affiliateCountries: { affiliate_id: string; name: string; email: string; total: number; countries: { country_code: string; country_name: string; conversions: number }[] }[];
+  meta?: {
+    range: DashboardRange;
+    from: string | null;
+    generatedAt: string;
+    lastRewardfulSyncAt: string | null;
+    lastPosthogSyncAt: string | null;
+    rowLevelReferralCount: number;
+    sourceReferralCount: number;
+    rowLevelCoveragePct: number | null;
+  };
 }
 
 export interface FunnelRow {
@@ -76,9 +97,31 @@ export interface FunnelRow {
 
 export interface TtsResponse {
   window: { from: string; to: string };
+  generatedAt: string;
   totalFts: number;
+  overall: {
+    signupToFtsSecMedian: number | null;
+    googleSignupToFtsSecMedian: number | null;
+    restSignupToFtsSecMedian: number | null;
+    googleFts: number;
+    restFts: number;
+    googleSignups: number;
+    restSignups: number;
+    googleSuToFtsRate: number | null;
+    restSuToFtsRate: number | null;
+  };
   baselines: FunnelRow[];
   affiliates: FunnelRow[];
+  quality: {
+    materializedTokens: number;
+    resolvedTokens: number;
+    tokenCoveragePct: number | null;
+    timingRows: number;
+    affiliateTimingMatches: number;
+    affiliateAttributedFts: number;
+    dataThrough: string | null;
+    lastMaterializedAt: string | null;
+  };
   note?: string;
 }
 
@@ -89,106 +132,79 @@ export interface TtsPerAffiliate {
   countries: { code: string; name: string; count: number }[];
 }
 
-const CACHE_KEY_DASH = 'affiliateDashboard:v1';
-const CACHE_KEY_TTS = 'affiliateTts:v1';
 export const TTS_FROM = '2025-01-01';
 export const TTS_TO = '2027-01-01';
 
-export type Period = '7d' | '30d' | '90d' | 'all';
+export type Period = DashboardRange;
 
-export function useDashboard() {
+const dashboardCache = new Map<string, { at: number; data: DashboardData }>();
+const dashboardRequests = new Map<string, Promise<DashboardData>>();
+const MEMORY_CACHE_MS = 15_000;
+
+async function fetchDashboard(range: DashboardRange, refreshVersion: number): Promise<DashboardData> {
+  const key = `${range}:${refreshVersion}`;
+  const cached = dashboardCache.get(key);
+  if (cached && Date.now() - cached.at < MEMORY_CACHE_MS) return cached.data;
+
+  const inFlight = dashboardRequests.get(key);
+  if (inFlight) return inFlight;
+
+  const request = fetch(`/api/dashboard?period=${range}`, { cache: 'no-store' })
+    .then(async (response) => {
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload?.error ?? `Dashboard request failed (${response.status})`);
+      dashboardCache.set(key, { at: Date.now(), data: payload });
+      return payload as DashboardData;
+    })
+    .finally(() => dashboardRequests.delete(key));
+
+  dashboardRequests.set(key, request);
+  return request;
+}
+
+export function useDashboard(rangeOverride?: DashboardRange | null) {
+  const dashboardRange = useDashboardRange();
+  const effectiveRange = rangeOverride ?? dashboardRange.range;
   const [data, setData] = useState<DashboardData | null>(null);
-  const [ttsData, setTtsData] = useState<TtsResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [period, setPeriod] = useState<Period>('all');
+  const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (p?: Period) => {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setData(null);
     try {
-      const dashPromise = fetch(`/api/dashboard?period=${p ?? 'all'}`).then(r => r.json());
-      const ttsPromise = fetch(`/api/affiliates/tts?from=${TTS_FROM}&to=${TTS_TO}`)
-        .then(r => r.json()).catch(() => null);
-
-      const json = await dashPromise;
+      const json = await fetchDashboard(effectiveRange, dashboardRange.refreshVersion);
       setData(json);
-      const now = new Date();
+      const now = json.meta?.generatedAt ? new Date(json.meta.generatedAt) : new Date();
       setLastUpdated(now);
-      try { localStorage.setItem(CACHE_KEY_DASH, JSON.stringify({ at: now.toISOString(), period: p ?? 'all', data: json })); } catch {}
-
-      ttsPromise.then(tts => {
-        if (tts && tts.affiliates) {
-          setTtsData(tts);
-          try { localStorage.setItem(CACHE_KEY_TTS, JSON.stringify({ at: new Date().toISOString(), data: tts })); } catch {}
-        }
-      }).catch(() => {});
-    } catch (e) {
-      console.error(e);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Failed to load dashboard';
+      setError(message);
+      console.error(cause);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dashboardRange.refreshVersion, effectiveRange]);
 
   useEffect(() => {
-    // Hydrate from localStorage so navigation between split pages is instant.
-    let hadCache = false;
-    try {
-      const cached = localStorage.getItem(CACHE_KEY_DASH);
-      if (cached) {
-        const { at, data: d, period: cachedPeriod } = JSON.parse(cached);
-        if (d) {
-          setData(d);
-          setLastUpdated(new Date(at));
-          if (cachedPeriod) setPeriod(cachedPeriod);
-          setLoading(false);
-          hadCache = true;
-        }
-      }
-      const cachedTts = localStorage.getItem(CACHE_KEY_TTS);
-      if (cachedTts) {
-        const { data: t } = JSON.parse(cachedTts);
-        if (t && t.affiliates) setTtsData(t);
-      }
-    } catch { /* localStorage unavailable */ }
-    if (!hadCache) load();
+    load().catch(() => {});
   }, [load]);
 
-  const refresh = useCallback(async (p?: Period) => {
-    setLoading(true);
-    await load(p ?? period);
-  }, [load, period]);
-
-  const sync = useCallback(async () => {
-    setSyncing(true);
-    try {
-      await fetch('/api/sync', { method: 'POST' });
-      await load(period);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setSyncing(false);
-    }
-  }, [load, period]);
-
-  const ttsByAffiliateId = useMemo(() => {
-    const m = new Map<string, TtsPerAffiliate>();
-    if (!ttsData?.affiliates) return m;
-    for (const r of ttsData.affiliates) {
-      if (r.affiliateId) m.set(r.affiliateId, {
-        signupToFtsSecMedian: r.signupToFtsSecMedian,
-        googleSimilarity: r.googleSimilarity,
-        fts: r.fts,
-        countries: r.countries ?? [],
-      });
-    }
-    return m;
-  }, [ttsData]);
+  const refresh = useCallback(async () => dashboardRange.refresh(), [dashboardRange]);
 
   return {
-    data, ttsData, ttsByAffiliateId,
-    loading, syncing, lastUpdated,
-    period, setPeriod,
-    load, refresh, sync,
+    data,
+    loading,
+    error,
+    syncing: dashboardRange.syncing,
+    lastUpdated,
+    period: effectiveRange,
+    setPeriod: dashboardRange.setRange,
+    load,
+    refresh,
+    sync: dashboardRange.syncRewardful,
   };
 }
 
