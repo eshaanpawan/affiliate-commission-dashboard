@@ -4,22 +4,23 @@ import * as React from 'react';
 import {
   ArrowLeft,
   ArrowRight,
+  Activity,
   CircleAlert,
-  Clock3,
   DatabaseZap,
   Download,
+  FilePenLine,
   Inbox,
+  LayoutDashboard,
   MailCheck,
   MailPlus,
-  Network,
   RefreshCw,
   Reply,
   Search,
   Send,
+  Settings2,
   ShieldCheck,
   X,
   Users,
-  Workflow,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -68,6 +69,7 @@ type Overview = {
     status: number | null;
     dailyLimit: number | null;
     dailyMaxLeads: number | null;
+    stopOnReply: boolean;
     sendingAccounts: string[];
     steps: number;
     variants: number;
@@ -169,7 +171,7 @@ function Stat({ label, value, detail, tone = 'plain' }: { label: string; value: 
 }
 
 export default function MailCenterPage() {
-  const [activeTab, setActiveTab] = React.useState('inbox');
+  const [activeTab, setActiveTab] = React.useState('dashboard');
   const [overview, setOverview] = React.useState<Overview | null>(null);
   const [audience, setAudience] = React.useState<Audience | null>(null);
   const [threads, setThreads] = React.useState<ThreadSummary[]>([]);
@@ -236,7 +238,7 @@ export default function MailCenterPage() {
     routeStateApplied.current = true;
     const params = new URLSearchParams(window.location.search);
     const requestedTab = params.get('tab');
-    if (requestedTab && ['inbox', 'campaign', 'workflow', 'audience'].includes(requestedTab)) {
+    if (requestedTab && ['dashboard', 'inbox', 'drafts', 'campaign', 'audience'].includes(requestedTab)) {
       setActiveTab(requestedTab);
     }
     const requestedQuery = params.get('q')?.trim() ?? '';
@@ -299,6 +301,30 @@ export default function MailCenterPage() {
       updateRoute({ thread: null });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Search failed');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function openAffiliateInbox(item: Audience['items'][number]) {
+    if (!item.email) {
+      toast.error('This affiliate has no email address.');
+      return;
+    }
+    setActiveTab('inbox');
+    setSearch(item.email);
+    setBusy('contact-inbox');
+    updateRoute({ tab: 'inbox', thread: null, contact: item.email, q: null, page: null });
+    try {
+      const result = await readJson<{ items: ThreadSummary[]; nextStartingAfter: string | null }>(`/api/mail/threads?limit=30&search=${encodeURIComponent(item.email)}`);
+      setThreads(result.items);
+      setThreadCursor(result.nextStartingAfter);
+      setSelectedThread(null);
+      setThread(null);
+      setThreadError(null);
+      if (result.items[0]) await openThread(result.items[0].threadId);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not open this affiliate inbox.');
     } finally {
       setBusy(null);
     }
@@ -397,49 +423,64 @@ export default function MailCenterPage() {
     : latestMessage?.to;
 
   return (
-    <div className="grid gap-5 px-4 py-6 md:px-6">
-      <section className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground"><MailCheck className="size-3.5" /> Runable partner communications</div>
-          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Affiliate Mail Center</h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">One place to reconcile Rewardful contacts, inspect Instantly replies, design outreach paths, and control who can send. Campaign launch remains a separate human approval.</p>
+    <div className="grid gap-4 px-3 py-4 md:px-6 md:py-5">
+      <header className="flex min-h-12 flex-col gap-3 border-b pb-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <span className="grid size-10 place-items-center rounded-xl bg-foreground text-background"><MailCheck className="size-5" /></span>
+          <div><h1 className="text-xl font-semibold tracking-tight">Mail Center</h1><p className="text-xs text-muted-foreground">Rewardful + Instantly</p></div>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge variant={state.safe ? 'secondary' : 'destructive'}><ShieldCheck /> {overview.campaign.name || 'Affiliate campaign'} · {state.label}</Badge>
-          <Button variant="outline" size="sm" onClick={() => void load()}><RefreshCw /> Refresh</Button>
-        </div>
-      </section>
-
-      <section className="grid border-y sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Rewardful audience" value={audience.counts.total.toLocaleString()} detail={`${audience.counts.emailable.toLocaleString()} valid email addresses`} />
-        <Stat label="Inbox requiring review" value={overview.unibox.unread.toLocaleString()} detail="Unread Instantly conversations" tone={overview.unibox.unread ? 'warn' : 'good'} />
-        <Stat label="Draft send capacity" value={`${selectedCapacity}/day`} detail={`${selectedSenders.length} selected · maximum 30 per sender`} tone={selectedSenders.length > 0 ? 'good' : 'warn'} />
-        <Stat label="Contact reconciliation" value={`${audience.sync.synced.toLocaleString()} / ${audience.sync.total.toLocaleString()}`} detail={`${audience.sync.pending} queued · ${audience.sync.skippedExisting} existing/protected · ${audience.sync.errors + audience.sync.emailChanged} need review`} tone={audience.sync.errors + audience.sync.emailChanged ? 'warn' : 'plain'} />
-      </section>
+        <div className="flex flex-wrap items-center gap-2"><Badge variant={state.safe ? 'secondary' : 'destructive'}><ShieldCheck /> {state.label}</Badge><span className="hidden text-xs text-muted-foreground md:inline">{overview.campaign.name}</span><Button variant="outline" size="icon-sm" onClick={() => void load()} aria-label="Refresh Mail Center"><RefreshCw /></Button></div>
+      </header>
 
       <Tabs
         value={activeTab}
         onValueChange={(value) => {
           setActiveTab(value);
-          updateRoute({ tab: value === 'inbox' ? null : value, thread: value === 'inbox' ? selectedThread : null });
+          updateRoute({ tab: value === 'dashboard' ? null : value, thread: value === 'inbox' ? selectedThread : null, contact: value === 'inbox' ? search || null : null });
         }}
         className="min-w-0 gap-4"
       >
-        <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-none border-b bg-transparent p-0">
-          <TabsTrigger value="inbox" className="h-10 px-4"><Inbox /> Inbox <Badge variant="secondary">{overview.unibox.unread}</Badge></TabsTrigger>
-          <TabsTrigger value="campaign" className="h-10 px-4"><Send /> Campaign</TabsTrigger>
-          <TabsTrigger value="workflow" className="h-10 px-4"><Workflow /> Workflow</TabsTrigger>
-          <TabsTrigger value="audience" className="h-10 px-4"><Users /> Audience <Badge variant="secondary">{audience.counts.total}</Badge></TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-5 overflow-x-auto rounded-xl border bg-muted/30 p-1">
+          <TabsTrigger value="dashboard" className="h-10 min-w-28"><LayoutDashboard /> <span className="hidden sm:inline">Dashboard</span></TabsTrigger>
+          <TabsTrigger value="inbox" className="h-10 min-w-24"><Inbox /> <span className="hidden sm:inline">Inbox</span>{overview.unibox.unread > 0 && <Badge variant="destructive">{overview.unibox.unread}</Badge>}</TabsTrigger>
+          <TabsTrigger value="drafts" className="h-10 min-w-24"><FilePenLine /> <span className="hidden sm:inline">Drafts</span><Badge variant="secondary">{overview.campaign.steps}</Badge></TabsTrigger>
+          <TabsTrigger value="campaign" className="h-10 min-w-28"><Settings2 /> <span className="hidden sm:inline">Campaign</span></TabsTrigger>
+          <TabsTrigger value="audience" className="h-10 min-w-28"><Users /> <span className="hidden sm:inline">Audience</span><Badge variant="secondary">{audience.counts.total}</Badge></TabsTrigger>
         </TabsList>
 
+        <TabsContent value="dashboard" className="grid gap-4">
+          <section className="grid overflow-hidden rounded-xl border bg-background sm:grid-cols-2 xl:grid-cols-4">
+            <Stat label="Affiliate contacts" value={audience.counts.total.toLocaleString()} detail={`${audience.counts.emailable.toLocaleString()} can receive email`} />
+            <Stat label="Unread replies" value={overview.unibox.unread.toLocaleString()} detail={overview.unibox.unread ? 'Needs review' : 'Inbox clear'} tone={overview.unibox.unread ? 'warn' : 'good'} />
+            <Stat label="Send capacity" value={`${selectedCapacity}/day`} detail={`${selectedSenders.length} senders · 30/day each`} tone="good" />
+            <Stat label="Synced contacts" value={audience.sync.synced.toLocaleString()} detail={`${audience.sync.pending} pending · ${audience.sync.errors + audience.sync.emailChanged} issues`} tone={audience.sync.errors + audience.sync.emailChanged ? 'warn' : 'good'} />
+          </section>
+
+          <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,.65fr)]">
+            <Card className="gap-0 overflow-hidden py-0"><CardHeader className="border-b py-4"><div><CardTitle>Operations</CardTitle><CardDescription>Current mail infrastructure and work queues</CardDescription></div></CardHeader><CardContent className="grid p-0 md:grid-cols-2">
+              <button type="button" onClick={() => setActiveTab('inbox')} className="group flex items-start gap-4 border-b p-5 text-left transition-colors hover:bg-muted/30 md:border-r"><span className="grid size-10 place-items-center rounded-lg bg-blue-500/10 text-blue-600"><Inbox className="size-5" /></span><span><span className="block text-sm font-semibold">Inbox</span><span className="mt-1 block text-2xl font-semibold tabular-nums">{overview.unibox.unread}</span><span className="text-xs text-muted-foreground">unread conversations</span></span><ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform group-hover:translate-x-1" /></button>
+              <button type="button" onClick={() => setActiveTab('drafts')} className="group flex items-start gap-4 border-b p-5 text-left transition-colors hover:bg-muted/30"><span className="grid size-10 place-items-center rounded-lg bg-amber-500/10 text-amber-700"><FilePenLine className="size-5" /></span><span><span className="block text-sm font-semibold">Sequence draft</span><span className="mt-1 block text-2xl font-semibold tabular-nums">{overview.campaign.steps}</span><span className="text-xs text-muted-foreground">steps · {overview.campaign.variants} variants</span></span><ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform group-hover:translate-x-1" /></button>
+              <button type="button" onClick={() => setActiveTab('campaign')} className="group flex items-start gap-4 border-b p-5 text-left transition-colors hover:bg-muted/30 md:border-b-0 md:border-r"><span className="grid size-10 place-items-center rounded-lg bg-emerald-500/10 text-emerald-700"><Activity className="size-5" /></span><span><span className="block text-sm font-semibold">Sending accounts</span><span className="mt-1 block text-2xl font-semibold tabular-nums">{selectedSenders.length}</span><span className="text-xs text-muted-foreground">{selectedCapacity} emails/day</span></span><ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform group-hover:translate-x-1" /></button>
+              <button type="button" onClick={() => setActiveTab('audience')} className="group flex items-start gap-4 p-5 text-left transition-colors hover:bg-muted/30"><span className="grid size-10 place-items-center rounded-lg bg-violet-500/10 text-violet-700"><Users className="size-5" /></span><span><span className="block text-sm font-semibold">Audience</span><span className="mt-1 block text-2xl font-semibold tabular-nums">{audience.counts.suspicious}</span><span className="text-xs text-muted-foreground">risk-flagged contacts</span></span><ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform group-hover:translate-x-1" /></button>
+            </CardContent></Card>
+
+            <Card className="gap-0 py-0"><CardHeader className="border-b py-4"><CardTitle>System status</CardTitle></CardHeader><CardContent className="grid gap-4 py-5">
+              <div><div className="mb-2 flex items-center justify-between text-sm"><span>Contact reconciliation</span><strong>{Math.round((audience.sync.synced / Math.max(1, audience.sync.total)) * 100)}%</strong></div><Progress value={(audience.sync.synced / Math.max(1, audience.sync.total)) * 100} /></div>
+              <div className="grid gap-2 text-sm"><div className="flex items-center justify-between border-b py-2"><span className="text-muted-foreground">Campaign</span><Badge variant={state.safe ? 'secondary' : 'destructive'}>{state.label}</Badge></div><div className="flex items-center justify-between border-b py-2"><span className="text-muted-foreground">Stop on reply</span><strong>{overview.campaign.stopOnReply ? 'On' : 'Off'}</strong></div><div className="flex items-center justify-between border-b py-2"><span className="text-muted-foreground">Daily lead limit</span><strong>{overview.campaign.dailyMaxLeads ?? 0}</strong></div><div className="flex items-center justify-between py-2"><span className="text-muted-foreground">Sender health</span><strong>{overview.accounts.items.filter((account) => account.status === 1 && !account.setupPending).length}/{overview.accounts.items.length} ready</strong></div></div>
+            </CardContent></Card>
+          </section>
+
+          <Card className="gap-0 overflow-hidden py-0"><CardHeader className="border-b py-4"><div><CardTitle>Recent conversations</CardTitle><CardDescription>Latest activity from Instantly</CardDescription></div><Button variant="outline" size="sm" onClick={() => setActiveTab('inbox')}>Open inbox <ArrowRight /></Button></CardHeader><CardContent className="p-0">{threads.slice(0, 5).map((item) => <button key={item.threadId} type="button" onClick={() => { setActiveTab('inbox'); void openThread(item.threadId); }} className="grid w-full gap-1 border-b px-4 py-3 text-left last:border-0 hover:bg-muted/30 sm:grid-cols-[minmax(0,1fr)_180px_100px] sm:items-center"><span><span className="block truncate text-sm font-medium">{item.subject}</span><span className="block truncate text-xs text-muted-foreground">{item.preview || 'No preview'}</span></span><span className="truncate text-xs text-muted-foreground">{item.emailType === 'received' ? item.from : item.to}</span><span className="text-xs text-muted-foreground sm:text-right">{formatDate(item.sentAt)}</span></button>)}{threads.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No campaign conversations yet.</div>}</CardContent></Card>
+        </TabsContent>
+
         <TabsContent value="inbox">
-          <div className="grid min-h-[620px] overflow-hidden rounded-xl border bg-background shadow-xs lg:grid-cols-[360px_minmax(0,1fr)]">
+          <div className="grid min-h-[680px] overflow-hidden rounded-xl border bg-background shadow-xs lg:grid-cols-[380px_minmax(0,1fr)]">
             <aside className={`${selectedThread ? 'hidden lg:block' : 'block'} border-b bg-muted/15 lg:border-b-0 lg:border-r`}>
-              <div className="flex gap-2 border-b p-3">
+              <div className="border-b p-4"><div className="mb-3 flex items-center justify-between"><div><h2 className="font-semibold">Inbox</h2><p className="text-xs text-muted-foreground">{overview.unibox.unread} unread</p></div><Button variant="ghost" size="icon-sm" onClick={() => void load()} aria-label="Refresh inbox"><RefreshCw /></Button></div><div className="flex gap-2">
                 <Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void findThreads(); }} placeholder="Search replies, subject, affiliate…" />
                 <Button size="icon-sm" variant="outline" onClick={() => void findThreads()} disabled={busy === 'search'} aria-label="Search mail"><Search /></Button>
-                {search && <Button size="icon-sm" variant="ghost" onClick={() => { setSearch(''); setBusy('search'); void readJson<{ items: ThreadSummary[]; nextStartingAfter: string | null }>('/api/mail/threads?limit=30').then((result) => { setThreads(result.items); setThreadCursor(result.nextStartingAfter); }).catch((error) => toast.error(error instanceof Error ? error.message : 'Could not clear search')).finally(() => setBusy(null)); }} aria-label="Clear mail search"><X /></Button>}
-              </div>
+                {search && <Button size="icon-sm" variant="ghost" onClick={() => { setSearch(''); updateRoute({ contact: null }); setBusy('search'); void readJson<{ items: ThreadSummary[]; nextStartingAfter: string | null }>('/api/mail/threads?limit=30').then((result) => { setThreads(result.items); setThreadCursor(result.nextStartingAfter); }).catch((error) => toast.error(error instanceof Error ? error.message : 'Could not clear search')).finally(() => setBusy(null)); }} aria-label="Clear mail search"><X /></Button>}
+              </div></div>
               <ScrollArea className="h-[620px] lg:h-[560px]">
                 {threads.map((item) => (
                   <button key={item.threadId} type="button" onClick={() => void openThread(item.threadId)} aria-current={selectedThread === item.threadId ? 'true' : undefined} className={`block w-full border-b px-4 py-3 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selectedThread === item.threadId ? 'bg-muted' : ''}`}>
@@ -449,14 +490,14 @@ export default function MailCenterPage() {
                     <p className="mt-2 text-[10px] uppercase tracking-wide text-muted-foreground">{formatDate(item.sentAt)}</p>
                   </button>
                 ))}
-                {threads.length === 0 && <div className="p-10 text-center text-sm text-muted-foreground"><Inbox className="mx-auto mb-3 size-6" />No campaign threads found.</div>}
+                {threads.length === 0 && <div className="p-10 text-center text-sm text-muted-foreground"><Inbox className="mx-auto mb-3 size-6" />{search ? `No conversation found for ${search}.` : 'No campaign conversations yet.'}</div>}
                 {threadCursor && <div className="p-3"><Button className="w-full" variant="outline" size="sm" onClick={() => void loadMoreThreads()} disabled={busy === 'more-threads'}>{busy === 'more-threads' ? <RefreshCw className="animate-spin" /> : <ArrowRight />} {busy === 'more-threads' ? 'Loading…' : 'Load more conversations'}</Button></div>}
               </ScrollArea>
             </aside>
 
             <section className={`${selectedThread ? 'block' : 'hidden lg:block'} min-w-0`}>
               {!selectedThread ? (
-                <div className="flex h-full min-h-[560px] items-center justify-center p-8 text-center"><div><MailPlus className="mx-auto size-8 text-muted-foreground" /><h2 className="mt-4 font-semibold">Open an affiliate conversation</h2><p className="mt-1 text-sm text-muted-foreground">Replies and sent messages appear together as one thread.</p></div></div>
+                <div className="flex h-full min-h-[620px] items-center justify-center p-8 text-center"><div><MailPlus className="mx-auto size-8 text-muted-foreground" /><h2 className="mt-4 font-semibold">Select a conversation</h2><p className="mt-1 text-sm text-muted-foreground">Read the full thread and reply from an approved sender.</p></div></div>
               ) : threadError ? (
                 <div className="flex min-h-[560px] items-center justify-center p-8 text-center"><div><CircleAlert className="mx-auto size-8 text-destructive" /><h2 className="mt-4 font-semibold">Conversation unavailable</h2><p className="mt-1 text-sm text-muted-foreground">{threadError}</p><div className="mt-4 flex justify-center gap-2"><Button variant="outline" onClick={() => { setSelectedThread(null); setThreadError(null); updateRoute({ thread: null }); }}><ArrowLeft /> Back to inbox</Button><Button onClick={() => void openThread(selectedThread)}><RefreshCw /> Try again</Button></div></div></div>
               ) : !thread ? <div className="grid gap-3 p-6"><Skeleton className="h-16" /><Skeleton className="h-36" /><Skeleton className="h-36" /></div> : (
@@ -474,13 +515,17 @@ export default function MailCenterPage() {
                       </Select>
                       <p className="truncate text-xs text-muted-foreground sm:ml-auto">To {replyRecipient || 'affiliate'}</p>
                     </div>
-                    <Textarea value={replyText} onChange={(event) => setReplyText(event.target.value)} placeholder="Write a manual reply. Nothing leaves Instantly until you confirm the final review." className="min-h-28 resize-y" />
-                    <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><p className="text-xs text-muted-foreground">Manual reply · approved sender only · final confirmation required</p><Button onClick={() => setConfirmReplyOpen(true)} disabled={!replyText.trim() || !replySender || busy === 'reply'}><Reply /> {busy === 'reply' ? 'Sending…' : 'Review reply'}</Button></div>
+                    <Textarea value={replyText} onChange={(event) => setReplyText(event.target.value)} placeholder="Write a reply…" className="min-h-28 resize-y" />
+                    <div className="mt-3 flex justify-end"><Button onClick={() => setConfirmReplyOpen(true)} disabled={!replyText.trim() || !replySender || busy === 'reply'}><Reply /> {busy === 'reply' ? 'Sending…' : 'Review reply'}</Button></div>
                   </div>
                 </div>
               )}
             </section>
           </div>
+        </TabsContent>
+
+        <TabsContent value="drafts">
+          <SequenceDraftEditor onSaved={load} />
         </TabsContent>
 
         <TabsContent value="campaign">
@@ -494,24 +539,16 @@ export default function MailCenterPage() {
               })}</CardContent>
             </Card>
             <div className="grid content-start gap-4">
-              <Card><CardHeader><CardTitle>Safe campaign configuration</CardTitle><CardDescription>The setup writes accounts and limits, but does not activate or send.</CardDescription></CardHeader><CardContent className="grid gap-4"><div className="grid grid-cols-2 gap-3 text-sm"><div className="border p-3"><p className="text-muted-foreground">Selected</p><p className="mt-1 text-xl font-semibold">{selectedSenders.length} / {overview.accounts.items.filter((account) => account.status === 1 && !account.setupPending).length} ready</p></div><div className="border p-3"><p className="text-muted-foreground">Capacity</p><p className="mt-1 text-xl font-semibold">{selectedCapacity}/day</p></div></div><div className="flex items-start gap-2 border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed"><CircleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" /><span>Every account is capped at <strong>30/day</strong>. The campaign must stay <strong>Draft</strong>; contact import cannot trigger delivery.</span></div><Button onClick={() => void configureCampaign()} disabled={selectedSenders.length < 1 || !state.safe || busy === 'campaign'}><DatabaseZap /> {busy === 'campaign' ? 'Configuring…' : `Apply ${selectedSenders.length} × 30 draft setup`}</Button></CardContent></Card>
-              <Card><CardHeader><CardTitle>Sequence readiness</CardTitle></CardHeader><CardContent className="grid gap-2 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">Steps</span><strong>{overview.campaign.steps}</strong></div><div className="flex justify-between"><span className="text-muted-foreground">Variants</span><strong>{overview.campaign.variants}</strong></div><div className="flex justify-between"><span className="text-muted-foreground">Daily max leads</span><strong>{overview.campaign.dailyMaxLeads ?? 0}</strong></div><Badge variant="destructive" className="mt-2">Copy approval required before launch</Badge></CardContent></Card>
+              <Card><CardHeader><CardTitle>Campaign limits</CardTitle><CardDescription>{overview.campaign.name}</CardDescription></CardHeader><CardContent className="grid gap-4"><div className="grid grid-cols-2 gap-3 text-sm"><div className="rounded-lg border p-3"><p className="text-muted-foreground">Selected</p><p className="mt-1 text-xl font-semibold">{selectedSenders.length} / {overview.accounts.items.filter((account) => account.status === 1 && !account.setupPending).length}</p></div><div className="rounded-lg border p-3"><p className="text-muted-foreground">Capacity</p><p className="mt-1 text-xl font-semibold">{selectedCapacity}/day</p></div></div><div className="grid gap-2 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">Per account</span><strong>30/day max</strong></div><div className="flex justify-between"><span className="text-muted-foreground">Stop on reply</span><strong>{overview.campaign.stopOnReply ? 'Enabled' : 'Disabled'}</strong></div><div className="flex justify-between"><span className="text-muted-foreground">Status</span><Badge variant={state.safe ? 'secondary' : 'destructive'}>{state.label}</Badge></div></div><Button onClick={() => void configureCampaign()} disabled={selectedSenders.length < 1 || !state.safe || busy === 'campaign'}><DatabaseZap /> {busy === 'campaign' ? 'Saving…' : 'Save sender configuration'}</Button></CardContent></Card>
             </div>
           </div>
-          <div className="mt-4">
-            <SequenceDraftEditor onSaved={load} />
-          </div>
-        </TabsContent>
-
-        <TabsContent value="workflow">
-          <Card className="overflow-hidden py-0"><CardHeader className="border-b py-5"><CardTitle>Fraud-aware outreach workflow</CardTitle><CardDescription>A clear operating model for onboarding, growth, and policy review. Nodes below are a draft plan; they do not send until copy and launch are separately approved.</CardDescription></CardHeader><CardContent className="p-5"><div className="grid gap-3 lg:grid-cols-[1fr_48px_1fr_48px_1fr] lg:items-stretch"><WorkflowNode icon={Users} eyebrow="Trigger" title="Rewardful roster sync" detail="New or changed affiliates enter the durable queue. Email changes are quarantined." status="live" /><Connector /><WorkflowNode icon={Network} eyebrow="Decision" title="Segment by evidence" detail="Verification pending, onboarding, active partner, medium risk, or high-risk review." status="rules" /><Connector /><WorkflowNode icon={MailPlus} eyebrow="Draft action" title="Choose approved sequence" detail="Select tone and evidence level. No copy exists until you write and approve it." status="blocked" /></div><div className="my-4 border-l-2 border-dashed border-border pl-6 lg:ml-[calc(50%-1px)]"><Clock3 className="size-4 text-muted-foreground" /></div><div className="grid gap-3 lg:grid-cols-3"><WorkflowNode icon={MailCheck} eyebrow="Path A" title="Onboarding & activation" detail="Welcome → assets → placement date → performance check-in." status="draft" /><WorkflowNode icon={Send} eyebrow="Path B" title="Partner growth" detail="Co-marketing experiment → conversion asset → measured follow-up." status="draft" /><WorkflowNode icon={ShieldCheck} eyebrow="Path C" title="Risk clarification" detail="Evidence notice → response window → human review → payout/enforcement decision." status="draft" /></div><div className="mt-5 grid gap-px border bg-border md:grid-cols-3"><div className="bg-background p-4"><p className="text-xs font-semibold">Variant A</p><p className="mt-1 text-xs text-muted-foreground">Direct, concise operational note.</p></div><div className="bg-background p-4"><p className="text-xs font-semibold">Variant B</p><p className="mt-1 text-xs text-muted-foreground">Context-first partner education.</p></div><div className="bg-background p-4"><p className="text-xs font-semibold">Global stop rule</p><p className="mt-1 text-xs text-muted-foreground">Stop on reply; never auto-ban or release payouts.</p></div></div></CardContent></Card>
         </TabsContent>
 
         <TabsContent value="audience">
           <Card className="gap-0 overflow-hidden py-0">
-            <CardHeader className="border-b py-4"><div><CardTitle>Rewardful source roster</CardTitle><CardDescription>Canonical affiliate contacts with Instantly reconciliation and risk-aware segments.</CardDescription></div><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" asChild><a href="/api/mail/affiliates.csv"><Download /> Download CSV</a></Button><Button size="sm" onClick={() => void syncAudience()} disabled={!state.safe || busy === 'sync'}><DatabaseZap /> {busy === 'sync' ? 'Reconciling…' : 'Sync to draft campaign'}</Button></div></CardHeader>
+            <CardHeader className="border-b py-4"><div><CardTitle>Audience</CardTitle><CardDescription>Rewardful contacts and Instantly conversation access</CardDescription></div><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" asChild><a href="/api/mail/affiliates.csv"><Download /> CSV</a></Button><Button size="sm" onClick={() => void syncAudience()} disabled={!state.safe || busy === 'sync'}><DatabaseZap /> {busy === 'sync' ? 'Syncing…' : 'Sync audience'}</Button></div></CardHeader>
             <div className="flex flex-col gap-3 border-b bg-muted/15 p-3 sm:flex-row sm:items-center"><div className="relative max-w-md flex-1"><Search className="absolute left-2.5 top-2 size-4 text-muted-foreground" /><Input className="pl-8" placeholder="Search name or email" value={audienceSearch} onChange={(event) => setAudienceSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { setAudiencePage(1); updateRoute({ tab: 'audience', q: audienceSearch, page: null }); void loadAudience(1, audienceSearch); } }} /></div><Button variant="outline" size="sm" onClick={() => { setAudiencePage(1); updateRoute({ tab: 'audience', q: audienceSearch, page: null }); void loadAudience(1, audienceSearch); }}>Search</Button>{audienceSearch && <Button variant="ghost" size="sm" onClick={() => { setAudienceSearch(''); setAudiencePage(1); updateRoute({ tab: 'audience', q: null, page: null }); void loadAudience(1, ''); }}><X /> Clear</Button>}<p className="text-xs text-muted-foreground sm:ml-auto">{audience.counts.suspicious} suspicious · {audience.counts.unconfirmed} awaiting confirmation</p></div>
-            <CardContent className="p-0"><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="border-b bg-muted/20 text-left text-[11px] uppercase tracking-wide text-muted-foreground"><tr><th className="px-4 py-3">Affiliate</th><th className="px-3 py-3">Lifecycle</th><th className="px-3 py-3">Mail sync</th><th className="px-3 py-3 text-right">Visitors</th><th className="px-3 py-3 text-right">Paid</th><th className="px-3 py-3 text-right">Due</th><th className="px-4 py-3 text-right">Risk</th></tr></thead><tbody>{audience.items.map((item) => <tr key={item.id} className="border-b last:border-0 hover:bg-muted/20"><td className="px-4 py-3"><p className="font-medium">{item.name}</p><p className="text-xs text-muted-foreground">{item.email || 'No email'}</p></td><td className="px-3 py-3"><Badge variant="outline">{item.segment.replaceAll('_', ' ')}</Badge></td><td className="px-3 py-3"><Badge variant={item.syncStatus === 'synced' ? 'secondary' : item.syncStatus === 'error' || item.syncStatus === 'email_changed' ? 'destructive' : 'outline'}>{item.syncStatus.replaceAll('_', ' ')}</Badge>{item.syncError && <p className="mt-1 max-w-xs truncate text-[10px] text-destructive">{item.syncError}</p>}</td><td className="px-3 py-3 text-right tabular-nums">{item.visitors.toLocaleString()}</td><td className="px-3 py-3 text-right font-medium tabular-nums">{item.conversions.toLocaleString()}</td><td className="px-3 py-3 text-right tabular-nums">{money.format(item.unpaidCommissionCents / 100)}</td><td className="px-4 py-3 text-right"><Badge variant={item.riskScore >= 60 ? 'destructive' : 'secondary'}>{item.riskScore}</Badge></td></tr>)}</tbody></table></div>{audience.items.length === 0 && <div className="p-10 text-center text-sm text-muted-foreground">No affiliates match this search.</div>}<div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><p className="text-xs text-muted-foreground">Showing {(audience.page.number - 1) * audience.page.size + (audience.items.length ? 1 : 0)}–{(audience.page.number - 1) * audience.page.size + audience.items.length} of {audience.page.total.toLocaleString()}</p><div className="flex items-center gap-2"><Button variant="outline" size="icon-sm" disabled={audiencePage <= 1} onClick={() => { const next = audiencePage - 1; setAudiencePage(next); updateRoute({ tab: 'audience', q: audienceSearch, page: next }); void loadAudience(next, audienceSearch); }} aria-label="Previous audience page"><ArrowLeft /></Button><span className="text-xs tabular-nums">Page {audiencePage} / {totalPages}</span><Button variant="outline" size="icon-sm" disabled={audiencePage >= totalPages} onClick={() => { const next = audiencePage + 1; setAudiencePage(next); updateRoute({ tab: 'audience', q: audienceSearch, page: next }); void loadAudience(next, audienceSearch); }} aria-label="Next audience page"><ArrowRight /></Button></div></div></CardContent>
+            <CardContent className="p-0"><div className="overflow-x-auto"><table className="w-full min-w-[1080px] text-sm"><thead className="border-b bg-muted/20 text-left text-[11px] uppercase tracking-wide text-muted-foreground"><tr><th className="px-4 py-3">Affiliate</th><th className="px-3 py-3">Lifecycle</th><th className="px-3 py-3">Mail sync</th><th className="px-3 py-3 text-right">Visitors</th><th className="px-3 py-3 text-right">Paid</th><th className="px-3 py-3 text-right">Due</th><th className="px-3 py-3 text-right">Risk</th><th className="px-4 py-3 text-right">Conversation</th></tr></thead><tbody>{audience.items.map((item) => <tr key={item.id} className="border-b last:border-0 hover:bg-muted/20"><td className="px-4 py-3"><p className="font-medium">{item.name}</p><p className="text-xs text-muted-foreground">{item.email || 'No email'}</p></td><td className="px-3 py-3"><Badge variant="outline">{item.segment.replaceAll('_', ' ')}</Badge></td><td className="px-3 py-3"><Badge variant={item.syncStatus === 'synced' ? 'secondary' : item.syncStatus === 'error' || item.syncStatus === 'email_changed' ? 'destructive' : 'outline'}>{item.syncStatus.replaceAll('_', ' ')}</Badge>{item.syncError && <p className="mt-1 max-w-xs truncate text-[10px] text-destructive">{item.syncError}</p>}</td><td className="px-3 py-3 text-right tabular-nums">{item.visitors.toLocaleString()}</td><td className="px-3 py-3 text-right font-medium tabular-nums">{item.conversions.toLocaleString()}</td><td className="px-3 py-3 text-right tabular-nums">{money.format(item.unpaidCommissionCents / 100)}</td><td className="px-3 py-3 text-right"><Badge variant={item.riskScore >= 60 ? 'destructive' : 'secondary'}>{item.riskScore}</Badge></td><td className="px-4 py-3 text-right"><Button variant="outline" size="sm" disabled={!item.email || busy === 'contact-inbox'} onClick={() => void openAffiliateInbox(item)}><Inbox /> Open</Button></td></tr>)}</tbody></table></div>{audience.items.length === 0 && <div className="p-10 text-center text-sm text-muted-foreground">No affiliates match this search.</div>}<div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><p className="text-xs text-muted-foreground">Showing {(audience.page.number - 1) * audience.page.size + (audience.items.length ? 1 : 0)}–{(audience.page.number - 1) * audience.page.size + audience.items.length} of {audience.page.total.toLocaleString()}</p><div className="flex items-center gap-2"><Button variant="outline" size="icon-sm" disabled={audiencePage <= 1} onClick={() => { const next = audiencePage - 1; setAudiencePage(next); updateRoute({ tab: 'audience', q: audienceSearch, page: next }); void loadAudience(next, audienceSearch); }} aria-label="Previous audience page"><ArrowLeft /></Button><span className="text-xs tabular-nums">Page {audiencePage} / {totalPages}</span><Button variant="outline" size="icon-sm" disabled={audiencePage >= totalPages} onClick={() => { const next = audiencePage + 1; setAudiencePage(next); updateRoute({ tab: 'audience', q: audienceSearch, page: next }); void loadAudience(next, audienceSearch); }} aria-label="Next audience page"><ArrowRight /></Button></div></div></CardContent>
           </Card>
         </TabsContent>
       </Tabs>
@@ -536,12 +573,4 @@ export default function MailCenterPage() {
       </AlertDialog>
     </div>
   );
-}
-
-function WorkflowNode({ icon: Icon, eyebrow, title, detail, status }: { icon: typeof Users; eyebrow: string; title: string; detail: string; status: string }) {
-  return <div className="relative border bg-background p-4"><div className="flex items-start gap-3"><span className="grid size-9 shrink-0 place-items-center border bg-muted/30"><Icon className="size-4" /></span><div><p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">{eyebrow}</p><h3 className="mt-1 text-sm font-semibold">{title}</h3></div></div><p className="mt-3 text-xs leading-relaxed text-muted-foreground">{detail}</p><Badge variant={status === 'blocked' ? 'destructive' : 'outline'} className="mt-4">{status}</Badge></div>;
-}
-
-function Connector() {
-  return <div className="hidden items-center justify-center lg:flex"><div className="h-px w-full bg-border" /><ArrowRight className="-ml-1 size-4 shrink-0 text-muted-foreground" /></div>;
 }

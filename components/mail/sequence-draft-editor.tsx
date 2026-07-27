@@ -223,8 +223,8 @@ export function SequenceDraftEditor({ onSaved }: { onSaved: () => Promise<void> 
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <div className="mb-2 flex flex-wrap items-center gap-2"><Badge variant="outline"><FilePenLine /> Sequence draft</Badge><Badge variant="secondary"><ShieldCheck /> {campaignLabel(source.campaign.status)} only</Badge>{dirty && <Badge variant="destructive">Unsaved changes</Badge>}</div>
-              <CardTitle>Write and edit the email sequence</CardTitle>
-              <CardDescription className="mt-1 max-w-2xl">Each step can have up to five A/B variants. Delays happen after the current email before the next step. Saving updates copy only—it cannot activate this campaign.</CardDescription>
+              <CardTitle>Sequence builder</CardTitle>
+              <CardDescription className="mt-1">Write steps, variants and timing.</CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button variant="outline" onClick={() => void load()} disabled={saving}>Reset</Button>

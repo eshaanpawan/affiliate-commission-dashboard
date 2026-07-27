@@ -68,6 +68,7 @@ export async function GET(req: Request) {
         status: campaign.status ?? null,
         dailyLimit: campaign.daily_limit ?? null,
         dailyMaxLeads: campaign.daily_max_leads ?? null,
+        stopOnReply: campaign.stop_on_reply !== false,
         sendingAccounts: campaign.email_list ?? [],
         steps: sequenceCounts.steps,
         variants: sequenceCounts.variants,
