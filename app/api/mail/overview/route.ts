@@ -9,6 +9,7 @@ import {
   type InstantlyCampaign,
 } from '@/lib/instantly';
 import { mailJson, mailRouteError, requireMailAuth } from '../_shared';
+import { outreachSyncSummary } from '@/lib/outreach';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -29,7 +30,7 @@ export async function GET(req: Request) {
   try {
     const campaignId = getInstantlyCampaignId();
     const approvedSenders = getInstantlyApprovedSenders();
-    const [accountCollection, campaign, sendingStatus, latest] = await Promise.all([
+    const [accountCollection, campaign, sendingStatus, latest, outreachSync] = await Promise.all([
       collectCursorPages(
         (startingAfter) => listAccountsPage({ limit: 100, startingAfter, includeTags: true }),
         { maxPages: 20 },
@@ -43,6 +44,7 @@ export async function GET(req: Request) {
         previewOnly: true,
         sortOrder: 'desc',
       }),
+      outreachSyncSummary(),
     ]);
 
     const statusCounts = accountCollection.items.reduce<Record<string, number>>((counts, account) => {
@@ -59,6 +61,7 @@ export async function GET(req: Request) {
     );
     const sequenceCounts = campaignSequenceCounts(campaign);
 
+    const reconciliationResolved = outreachSync.synced + outreachSync.skippedExisting;
     return mailJson({
       source: 'instantly',
       fetchedAt: new Date().toISOString(),
@@ -66,9 +69,24 @@ export async function GET(req: Request) {
         id: campaign.id,
         name: campaign.name ?? null,
         status: campaign.status ?? null,
+        isEvergreen: campaign.is_evergreen === true,
         dailyLimit: campaign.daily_limit ?? null,
         dailyMaxLeads: campaign.daily_max_leads ?? null,
         stopOnReply: campaign.stop_on_reply !== false,
+        stopOnAutoReply: campaign.stop_on_auto_reply === true,
+        stopForCompany: campaign.stop_for_company === true,
+        openTracking: campaign.open_tracking !== false,
+        linkTracking: campaign.link_tracking !== false,
+        textOnly: campaign.text_only === true,
+        firstEmailTextOnly: campaign.first_email_text_only === true,
+        prioritizeNewLeads: campaign.prioritize_new_leads === true,
+        matchLeadEsp: campaign.match_lead_esp === true,
+        insertUnsubscribeHeader: campaign.insert_unsubscribe_header === true,
+        allowRiskyContacts: campaign.allow_risky_contacts === true,
+        bounceProtection: campaign.disable_bounce_protect !== true,
+        emailGap: campaign.email_gap ?? null,
+        randomWaitMax: campaign.random_wait_max ?? null,
+        schedule: campaign.campaign_schedule ?? null,
         sendingAccounts: campaign.email_list ?? [],
         steps: sequenceCounts.steps,
         variants: sequenceCounts.variants,
@@ -99,6 +117,17 @@ export async function GET(req: Request) {
           lastUsedAt: account.timestamp_last_used ?? null,
         })),
         truncated: accountCollection.truncated,
+      },
+      reconciliation: {
+        ...outreachSync,
+        resolved: reconciliationResolved,
+        inCampaign: outreachSync.synced,
+        existingElsewhere: outreachSync.skippedExisting,
+        needsAttention: outreachSync.pending + outreachSync.syncing
+          + outreachSync.errors + outreachSync.emailChanged + outreachSync.skippedExisting,
+        requiresCampaignImport: outreachSync.skippedExisting,
+        percent: outreachSync.total > 0 ? outreachSync.synced / outreachSync.total : 1,
+        resolvedPercent: outreachSync.total > 0 ? reconciliationResolved / outreachSync.total : 1,
       },
       unibox: {
         unread: latest.items.filter((email) => email.is_unread).length,

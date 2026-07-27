@@ -8,13 +8,16 @@ import {
   Check,
   Clock3,
   Copy,
+  ChevronDown,
+  ChevronUp,
   Eye,
-  FilePenLine,
+  EyeOff,
   LoaderCircle,
   Plus,
   Save,
   ShieldCheck,
   Trash2,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -74,6 +77,10 @@ function previewCopy(value: string) {
     .replaceAll('{{companyName}}', 'Northstar Media');
 }
 
+function delayLabel(delay: number, unit: DelayUnit) {
+  return `${delay} ${delay === 1 ? unit.slice(0, -1) : unit}`;
+}
+
 export function SequenceDraftEditor({ onSaved }: { onSaved: () => Promise<void> }) {
   const [source, setSource] = React.useState<SequencePayload | null>(null);
   const [steps, setSteps] = React.useState<Step[]>([]);
@@ -82,6 +89,8 @@ export function SequenceDraftEditor({ onSaved }: { onSaved: () => Promise<void> 
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [stepsExpanded, setStepsExpanded] = React.useState(true);
+  const [previewVisible, setPreviewVisible] = React.useState(true);
   const bodyRef = React.useRef<HTMLTextAreaElement | null>(null);
 
   const load = React.useCallback(async () => {
@@ -213,66 +222,71 @@ export function SequenceDraftEditor({ onSaved }: { onSaved: () => Promise<void> 
     }
   }
 
-  if (loading) return <Card><CardHeader><Skeleton className="h-6 w-48" /><Skeleton className="h-4 w-80" /></CardHeader><CardContent><Skeleton className="h-[420px] w-full" /></CardContent></Card>;
+  if (loading) return <Card className="lg:h-[calc(100dvh-12rem)] lg:min-h-[620px]"><CardHeader><Skeleton className="h-6 w-48" /><Skeleton className="h-4 w-80" /></CardHeader><CardContent className="min-h-0 flex-1"><Skeleton className="h-full min-h-[420px] w-full" /></CardContent></Card>;
   if (!source || !activeStep || !activeVariant) return <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">Sequence editor unavailable. <Button variant="link" onClick={() => void load()}>Try again</Button></CardContent></Card>;
 
   return (
     <>
-      <Card className="gap-0 overflow-hidden py-0">
-        <CardHeader className="border-b bg-muted/10 py-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <div className="mb-2 flex flex-wrap items-center gap-2"><Badge variant="outline"><FilePenLine /> Sequence draft</Badge><Badge variant="secondary"><ShieldCheck /> {campaignLabel(source.campaign.status)} only</Badge>{dirty && <Badge variant="destructive">Unsaved changes</Badge>}</div>
-              <CardTitle>Sequence builder</CardTitle>
-              <CardDescription className="mt-1">Write steps, variants and timing.</CardDescription>
+      <Card className="gap-0 overflow-hidden py-0 lg:h-[calc(100dvh-12rem)] lg:min-h-[620px] lg:flex-col">
+        <CardHeader className="shrink-0 border-b bg-muted/10 py-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2"><CardTitle>Sequence draft</CardTitle><Badge variant="secondary"><ShieldCheck /> {campaignLabel(source.campaign.status)}</Badge>{dirty && <Badge variant="destructive">Unsaved</Badge>}</div>
+              <CardDescription className="mt-1">{steps.length} step{steps.length === 1 ? '' : 's'} · {variantCount} variant{variantCount === 1 ? '' : 's'}</CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" onClick={() => void load()} disabled={saving}>Reset</Button>
-              <Button onClick={() => { if (validate()) setConfirmOpen(true); }} disabled={!canSave || saving}>{saving ? <LoaderCircle className="animate-spin" /> : <Save />} {saving ? 'Saving…' : 'Save sequence draft'}</Button>
+              <Button variant="ghost" size="sm" onClick={() => setStepsExpanded((value) => !value)}>{stepsExpanded ? <ChevronUp /> : <ChevronDown />} {stepsExpanded ? 'Collapse steps' : 'Show steps'}</Button>
+              <Button variant="outline" size="sm" onClick={() => setPreviewVisible((value) => !value)}>{previewVisible ? <EyeOff /> : <Eye />} {previewVisible ? 'Hide preview' : 'Show preview'}</Button>
+              <Button variant="outline" size="sm" onClick={() => void load()} disabled={saving || !dirty}>Reset</Button>
+              <Button size="sm" onClick={() => { if (validate()) setConfirmOpen(true); }} disabled={!canSave || saving}>{saving ? <LoaderCircle className="animate-spin" /> : <Save />} {saving ? 'Saving…' : 'Save draft'}</Button>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="p-0">
-          <div className="grid min-h-[620px] xl:grid-cols-[260px_minmax(0,1fr)_360px]">
-            <aside className="border-b bg-muted/10 p-3 xl:border-b-0 xl:border-r">
-              <div className="mb-3 flex items-center justify-between"><p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Sequence steps</p><Badge variant="secondary">{steps.length}</Badge></div>
-              <div className="grid gap-2">{steps.map((step, index) => (
-                <button key={index} type="button" onClick={() => { setSelectedStep(index); setSelectedVariant(0); }} className={`w-full border p-3 text-left transition-colors hover:bg-background ${selectedStep === index ? 'border-foreground bg-background shadow-xs' : 'bg-transparent'}`}>
-                  <div className="flex items-center gap-2"><span className="grid size-6 place-items-center bg-foreground text-xs font-semibold text-background">{index + 1}</span><span className="min-w-0 flex-1 truncate text-sm font-medium">{index === 0 ? 'Opening email' : `Follow-up ${index}`}</span></div>
-                  <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground"><span>{step.variants.length} variant{step.variants.length === 1 ? '' : 's'}</span><span>{step.delay} {step.delayUnit}</span></div>
+
+        {stepsExpanded && (
+          <div className="min-w-0 shrink-0 border-b bg-muted/15 p-3">
+            <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain pb-1">
+              {steps.map((step, index) => (
+                <button key={index} type="button" onClick={() => { setSelectedStep(index); setSelectedVariant(0); }} aria-current={selectedStep === index ? 'step' : undefined} className={`flex min-w-40 snap-start shrink-0 items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-w-44 ${selectedStep === index ? 'border-foreground bg-background shadow-xs' : 'bg-transparent'}`}>
+                  <span className={`grid size-7 shrink-0 place-items-center rounded-md text-xs font-semibold ${selectedStep === index ? 'bg-foreground text-background' : 'bg-muted text-muted-foreground'}`}>{index + 1}</span>
+                  <span className="min-w-0"><span className="block truncate text-sm font-medium">{index === 0 ? 'Opening email' : `Follow-up ${index}`}</span><span className="block text-[11px] text-muted-foreground">{delayLabel(step.delay, step.delayUnit)} · {step.variants.length} variant{step.variants.length === 1 ? '' : 's'}</span></span>
                 </button>
-              ))}</div>
-              <Button className="mt-3 w-full" variant="outline" onClick={addStep} disabled={steps.length >= 10}><Plus /> Add follow-up</Button>
-            </aside>
+              ))}
+              <Button className="h-auto min-w-36 shrink-0 border-dashed" variant="outline" onClick={addStep} disabled={steps.length >= 10}><Plus /> Add step</Button>
+            </div>
+          </div>
+        )}
 
-            <section className="min-w-0 p-4 md:p-5">
-              <div className="flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-center sm:justify-between">
-                <div><p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Step {selectedStep + 1}</p><h3 className="mt-1 font-semibold">{selectedStep === 0 ? 'Opening email' : `Follow-up ${selectedStep}`}</h3></div>
-                <div className="flex items-center gap-1"><Button size="icon-sm" variant="ghost" onClick={() => moveStep(selectedStep, -1)} disabled={selectedStep === 0} aria-label="Move step up"><ArrowUp /></Button><Button size="icon-sm" variant="ghost" onClick={() => moveStep(selectedStep, 1)} disabled={selectedStep === steps.length - 1} aria-label="Move step down"><ArrowDown /></Button><Button size="icon-sm" variant="ghost" onClick={() => removeStep(selectedStep)} disabled={steps.length === 1} aria-label="Remove step"><Trash2 /></Button></div>
+        <CardContent className="min-h-0 flex-1 p-0 lg:overflow-hidden">
+          <div className={`${previewVisible ? 'grid lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]' : 'block'} min-h-0 lg:h-full`}>
+            <section className="min-w-0 p-4 md:p-5 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden">
+              <div className="shrink-0 flex flex-col gap-3 border-b pb-4 xl:flex-row xl:items-end">
+                <div className="min-w-48"><p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Step {selectedStep + 1} of {steps.length}</p><h3 className="mt-1 font-semibold">{selectedStep === 0 ? 'Opening email' : `Follow-up ${selectedStep}`}</h3></div>
+                <div className="flex flex-1 flex-wrap items-end gap-2">
+                  <div className="w-24"><label className="mb-1 block text-[11px] text-muted-foreground">Wait</label><Input type="number" min={0} max={90} value={activeStep.delay} onChange={(event) => updateStep(selectedStep, { delay: Math.max(0, Math.min(90, Number.parseInt(event.target.value || '0', 10))) })} /></div>
+                  <div className="w-32"><label className="mb-1 block text-[11px] text-muted-foreground">Unit</label><Select value={activeStep.delayUnit} onValueChange={(value: DelayUnit) => updateStep(selectedStep, { delayUnit: value })}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="minutes">Minutes</SelectItem><SelectItem value="hours">Hours</SelectItem><SelectItem value="days">Days</SelectItem></SelectContent></Select></div>
+                  <div className="ml-auto flex items-center gap-1"><Button size="icon-sm" variant="ghost" onClick={() => moveStep(selectedStep, -1)} disabled={selectedStep === 0} aria-label="Move step earlier"><ArrowUp /></Button><Button size="icon-sm" variant="ghost" onClick={() => moveStep(selectedStep, 1)} disabled={selectedStep === steps.length - 1} aria-label="Move step later"><ArrowDown /></Button><Button size="icon-sm" variant="ghost" onClick={() => removeStep(selectedStep)} disabled={steps.length === 1} aria-label="Remove step"><Trash2 /></Button></div>
+                </div>
               </div>
 
-              <div className="grid gap-4 py-4 sm:grid-cols-[1fr_180px]">
-                <div><label className="mb-1.5 block text-xs font-medium">Wait after this email</label><Input type="number" min={0} max={90} value={activeStep.delay} onChange={(event) => updateStep(selectedStep, { delay: Math.max(0, Math.min(90, Number.parseInt(event.target.value || '0', 10))) })} /></div>
-                <div><label className="mb-1.5 block text-xs font-medium">Delay unit</label><Select value={activeStep.delayUnit} onValueChange={(value: DelayUnit) => updateStep(selectedStep, { delayUnit: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="minutes">Minutes</SelectItem><SelectItem value="hours">Hours</SelectItem><SelectItem value="days">Days</SelectItem></SelectContent></Select></div>
-              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-2 py-3"><span className="mr-1 text-xs font-medium text-muted-foreground">Variants</span>{activeStep.variants.map((_, index) => <Button key={index} size="sm" variant={selectedVariant === index ? 'default' : 'outline'} onClick={() => setSelectedVariant(index)}>{String.fromCharCode(65 + index)}</Button>)}<Button size="icon-sm" variant="ghost" onClick={addVariant} disabled={activeStep.variants.length >= 5} aria-label="Add variant"><Plus /></Button><span className="mx-1 h-5 w-px bg-border" /><Button variant="ghost" size="sm" onClick={duplicateVariant} disabled={activeStep.variants.length >= 5}><Copy /> Duplicate</Button><Button variant="ghost" size="sm" onClick={removeVariant} disabled={activeStep.variants.length === 1}><Trash2 /> Remove</Button></div>
 
-              <div className="flex flex-wrap items-center gap-2 border-y py-3"><span className="mr-1 text-xs font-medium text-muted-foreground">Variants</span>{activeStep.variants.map((_, index) => <Button key={index} size="sm" variant={selectedVariant === index ? 'default' : 'outline'} onClick={() => setSelectedVariant(index)}>Variant {String.fromCharCode(65 + index)}</Button>)}<Button size="icon-sm" variant="ghost" onClick={addVariant} disabled={activeStep.variants.length >= 5} aria-label="Add variant"><Plus /></Button></div>
-
-              <div className="grid gap-4 pt-4">
-                <div><div className="mb-1.5 flex items-center justify-between"><label className="text-xs font-medium">Subject</label><span className="text-[10px] tabular-nums text-muted-foreground">{activeVariant.subject.length} / 500</span></div><Input value={activeVariant.subject} maxLength={500} onChange={(event) => updateVariant({ subject: event.target.value })} placeholder="Write a clear subject line" /></div>
-                <div><div className="mb-1.5 flex flex-wrap items-center gap-2"><label className="mr-auto text-xs font-medium">Email body</label><Braces className="size-3.5 text-muted-foreground" />{MERGE_TAGS.map((tag) => <Button key={tag} size="xs" variant="outline" onClick={() => insertTag(tag)}>{tag}</Button>)}</div><Textarea ref={bodyRef} value={activeVariant.body} maxLength={50_000} onChange={(event) => updateVariant({ body: event.target.value })} placeholder="Write the email. Use merge tags for personalisation." className="min-h-64 resize-y font-mono text-sm leading-6" /></div>
-                <div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" onClick={duplicateVariant} disabled={activeStep.variants.length >= 5}><Copy /> Duplicate variant</Button><Button variant="ghost" size="sm" onClick={removeVariant} disabled={activeStep.variants.length === 1}><Trash2 /> Remove variant</Button></div>
+              <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-rows-[auto_minmax(0,1fr)]">
+                <div className="shrink-0"><div className="mb-1.5 flex items-center justify-between"><label className="text-xs font-medium">Subject</label><span className="text-[10px] tabular-nums text-muted-foreground">{activeVariant.subject.length} / 500</span></div><Input value={activeVariant.subject} maxLength={500} onChange={(event) => updateVariant({ subject: event.target.value })} placeholder="Subject line" /></div>
+                <div className="flex min-h-80 flex-col lg:min-h-0"><div className="mb-1.5 flex shrink-0 flex-wrap items-center gap-2"><label className="mr-auto text-xs font-medium">Message</label><Braces className="size-3.5 text-muted-foreground" />{MERGE_TAGS.map((tag) => <Button key={tag} size="xs" variant="outline" onClick={() => insertTag(tag)}>{tag}</Button>)}</div><Textarea ref={bodyRef} value={activeVariant.body} maxLength={50_000} onChange={(event) => updateVariant({ body: event.target.value })} placeholder="Write the email…" className="min-h-80 flex-1 resize-y font-mono text-sm leading-6 lg:min-h-0 lg:resize-none lg:field-sizing-fixed" /></div>
               </div>
             </section>
 
-            <aside className="border-t bg-muted/10 p-4 xl:border-l xl:border-t-0">
-              <div className="mb-4 flex items-center gap-2"><Eye className="size-4" /><div><p className="text-sm font-semibold">Live preview</p><p className="text-xs text-muted-foreground">Sample merge data only</p></div></div>
-              <div className="overflow-hidden rounded-xl border bg-background shadow-sm">
-                <div className="border-b bg-muted/20 px-4 py-3"><p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Subject</p><p className="mt-1 break-words text-sm font-semibold">{previewCopy(activeVariant.subject) || 'Your subject appears here'}</p></div>
-                <div className="p-4"><div className="mb-5 flex items-center gap-3"><span className="grid size-9 place-items-center rounded-full bg-foreground text-xs font-bold text-background">R</span><div><p className="text-sm font-medium">Runable Affiliates</p><p className="text-xs text-muted-foreground">to Avery</p></div></div><p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground/85">{previewCopy(activeVariant.body) || 'Your email body appears here.'}</p></div>
-              </div>
-              <div className="mt-4 grid gap-2 border p-3 text-xs"><div className="flex items-center gap-2"><Clock3 className="size-3.5 text-muted-foreground" /><span>{activeStep.delay} {activeStep.delayUnit} before the next step</span></div><div className="flex items-center gap-2"><Check className="size-3.5 text-emerald-600" /><span>Stop on reply remains enabled</span></div><div className="flex items-center gap-2"><ShieldCheck className="size-3.5 text-emerald-600" /><span>Save does not launch or send</span></div></div>
-            </aside>
+            {previewVisible && (
+              <aside className="border-t bg-muted/10 p-4 lg:min-h-0 lg:overflow-y-auto lg:border-l lg:border-t-0">
+                <div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2"><Eye className="size-4" /><p className="text-sm font-semibold">Preview</p></div><Button size="icon-sm" variant="ghost" onClick={() => setPreviewVisible(false)} aria-label="Hide preview"><X /></Button></div>
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-950 shadow-sm dark:border-slate-800 dark:bg-slate-950 dark:text-slate-50">
+                  <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-900"><p className="text-[10px] uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Subject</p><p className="mt-1 break-words text-sm font-semibold">{previewCopy(activeVariant.subject) || 'Subject preview'}</p></div>
+                  <div className="p-4"><div className="mb-5 flex items-center gap-3"><span className="grid size-9 place-items-center rounded-full bg-slate-950 text-xs font-bold text-white dark:bg-white dark:text-slate-950">R</span><div><p className="text-sm font-medium">Runable Affiliates</p><p className="text-xs text-slate-500 dark:text-slate-400">to Avery</p></div></div><p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-800 dark:text-slate-200">{previewCopy(activeVariant.body) || 'Your message preview will appear here.'}</p></div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-muted-foreground"><span className="flex items-center gap-1.5"><Clock3 className="size-3.5" />{delayLabel(activeStep.delay, activeStep.delayUnit)}</span><span className="flex items-center gap-1.5"><Check className="size-3.5 text-emerald-600" />Stop on reply</span><span className="flex items-center gap-1.5"><ShieldCheck className="size-3.5 text-emerald-600" />Draft only</span></div>
+              </aside>
+            )}
           </div>
         </CardContent>
       </Card>

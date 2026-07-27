@@ -91,8 +91,33 @@ export interface InstantlyCampaign {
   id: string;
   name?: string | null;
   status?: number | null;
+  is_evergreen?: boolean | null;
+  campaign_schedule?: {
+    schedules?: Array<{
+      name?: string | null;
+      timing?: { from?: string | null; to?: string | null } | null;
+      days?: Record<string, boolean> | null;
+      timezone?: string | null;
+    }> | null;
+    start_date?: string | null;
+    end_date?: string | null;
+  } | null;
+  email_gap?: number | null;
+  random_wait_max?: number | null;
+  text_only?: boolean | null;
+  first_email_text_only?: boolean | null;
   daily_limit?: number | null;
   daily_max_leads?: number | null;
+  stop_on_reply?: boolean | null;
+  link_tracking?: boolean | null;
+  open_tracking?: boolean | null;
+  stop_on_auto_reply?: boolean | null;
+  prioritize_new_leads?: boolean | null;
+  match_lead_esp?: boolean | null;
+  stop_for_company?: boolean | null;
+  insert_unsubscribe_header?: boolean | null;
+  allow_risky_contacts?: boolean | null;
+  disable_bounce_protect?: boolean | null;
   email_list?: string[] | null;
   sequences?: InstantlyCampaignSequence[] | null;
   timestamp_created?: string | null;

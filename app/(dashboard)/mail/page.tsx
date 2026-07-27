@@ -6,25 +6,30 @@ import {
   ArrowRight,
   Activity,
   CircleAlert,
-  DatabaseZap,
-  Download,
   FilePenLine,
   Inbox,
   LayoutDashboard,
-  MailCheck,
   MailPlus,
   RefreshCw,
   Reply,
   Search,
   Send,
   Settings2,
-  ShieldCheck,
   X,
   Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
+import { useDashboardRange } from '@/components/DashboardRangeProvider';
+import { AudienceWorkspace, type MailAudience, type MailAudienceItem } from '@/components/mail/audience-workspace';
+import {
+  AudienceGroups,
+  DraftAudiencePicker,
+  type AudienceGroup,
+  type AudienceGroupsPayload,
+} from '@/components/mail/audience-groups';
+import { CampaignSettings, type CampaignSettingsAccount, type CampaignSettingsCampaign } from '@/components/mail/campaign-settings';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -38,7 +43,6 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -63,55 +67,23 @@ type ThreadSummary = {
 
 type Overview = {
   fetchedAt: string;
-  campaign: {
-    id: string;
-    name: string | null;
-    status: number | null;
+  campaign: CampaignSettingsCampaign & {
     dailyLimit: number | null;
-    dailyMaxLeads: number | null;
-    stopOnReply: boolean;
-    sendingAccounts: string[];
     steps: number;
     variants: number;
   };
   accounts: {
     approvedSenders: string[];
     approvedConnected: number;
-    items: Array<{
-      email: string;
-      name: string | null;
-      status: number | null;
-      statusMessage: string | null;
-      setupPending: boolean | null;
+    items: Array<CampaignSettingsAccount & {
       warmupStatus: number | null;
-      warmupScore: number | null;
-      dailyLimit: number | null;
       lastUsedAt: string | null;
     }>;
   };
   unibox: { unread: number; latestThreads: ThreadSummary[] };
 };
 
-type Audience = {
-  counts: { total: number; active: number; suspicious: number; unconfirmed: number; emailable: number };
-  sync: { total: number; pending: number; syncing: number; synced: number; errors: number; emailChanged: number; skippedExisting: number; suppressed: number; lastSyncedAt: string | null };
-  page: { number: number; size: number; total: number };
-  items: Array<{
-    id: string;
-    name: string;
-    email: string | null;
-    status: string;
-    confirmedAt: string | null;
-    joinedAt: string | null;
-    visitors: number;
-    conversions: number;
-    unpaidCommissionCents: number;
-    riskScore: number;
-    segment: string;
-    syncStatus: string;
-    syncError: string | null;
-  }>;
-};
+type Audience = MailAudience;
 
 type ThreadDetail = {
   threadId: string;
@@ -129,7 +101,6 @@ type ThreadDetail = {
   }>;
 };
 
-const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const date = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 function formatDate(value: string | null) {
@@ -170,10 +141,35 @@ function Stat({ label, value, detail, tone = 'plain' }: { label: string; value: 
   );
 }
 
+function CompactEmptyState({
+  icon: Icon,
+  title,
+  detail,
+  action,
+  onAction,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  detail: string;
+  action?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <div className="relative m-3 flex flex-col gap-3 overflow-hidden rounded-xl border border-dashed bg-muted/10 p-4 sm:flex-row sm:items-center">
+      <div aria-hidden className="pointer-events-none absolute inset-0 opacity-30 [background-image:radial-gradient(circle_at_center,var(--border)_1px,transparent_1px)] [background-size:16px_16px]" />
+      <span className="relative grid size-9 shrink-0 place-items-center rounded-lg border bg-background shadow-xs"><Icon className="size-4 text-muted-foreground" /></span>
+      <div className="relative min-w-0 flex-1"><p className="text-sm font-semibold">{title}</p><p className="mt-0.5 text-xs text-muted-foreground">{detail}</p></div>
+      {action && onAction && <Button className="relative" variant="outline" size="sm" onClick={onAction}>{action}<ArrowRight /></Button>}
+    </div>
+  );
+}
+
 export default function MailCenterPage() {
+  const { refreshVersion } = useDashboardRange();
   const [activeTab, setActiveTab] = React.useState('dashboard');
   const [overview, setOverview] = React.useState<Overview | null>(null);
   const [audience, setAudience] = React.useState<Audience | null>(null);
+  const [groups, setGroups] = React.useState<AudienceGroupsPayload | null>(null);
   const [threads, setThreads] = React.useState<ThreadSummary[]>([]);
   const [threadCursor, setThreadCursor] = React.useState<string | null>(null);
   const [selectedThread, setSelectedThread] = React.useState<string | null>(null);
@@ -187,8 +183,10 @@ export default function MailCenterPage() {
   const [search, setSearch] = React.useState('');
   const [audienceSearch, setAudienceSearch] = React.useState('');
   const [audiencePage, setAudiencePage] = React.useState(1);
+  const [groupBusy, setGroupBusy] = React.useState(false);
   const [replyText, setReplyText] = React.useState('');
   const routeStateApplied = React.useRef(false);
+  const observedRefreshVersion = React.useRef(refreshVersion);
 
   const updateRoute = React.useCallback((updates: Record<string, string | number | null>) => {
     const params = new URLSearchParams(window.location.search);
@@ -205,13 +203,28 @@ export default function MailCenterPage() {
     setAudience(data);
   }, [audiencePage, audienceSearch]);
 
-  const load = React.useCallback(async () => {
+  const loadGroups = React.useCallback(async () => {
+    try {
+      setGroups(await readJson<AudienceGroupsPayload>('/api/mail/groups'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not load affiliate groups.');
+    }
+  }, []);
+
+  const load = React.useCallback(async (options: {
+    audiencePage?: number;
+    audienceSearch?: string;
+    threadSearch?: string;
+  } = {}) => {
     setLoading(true);
     try {
+      const requestedPage = options.audiencePage ?? 1;
+      const requestedAudienceSearch = options.audienceSearch ?? '';
+      const requestedThreadSearch = options.threadSearch ?? '';
       const [nextOverview, nextThreads, nextAudience] = await Promise.all([
         readJson<Overview>('/api/mail/overview'),
-        readJson<{ items: ThreadSummary[]; nextStartingAfter: string | null }>('/api/mail/threads?limit=30'),
-        readJson<Audience>('/api/mail/audience?page=1&pageSize=25'),
+        readJson<{ items: ThreadSummary[]; nextStartingAfter: string | null }>(`/api/mail/threads?limit=30${requestedThreadSearch ? `&search=${encodeURIComponent(requestedThreadSearch)}` : ''}`),
+        readJson<Audience>(`/api/mail/audience?page=${requestedPage}&pageSize=25&q=${encodeURIComponent(requestedAudienceSearch)}`),
       ]);
       setOverview(nextOverview);
       setThreads(nextThreads.items);
@@ -231,7 +244,17 @@ export default function MailCenterPage() {
     }
   }, []);
 
-  React.useEffect(() => { void load(); }, [load]);
+  React.useEffect(() => {
+    void load();
+    void loadGroups();
+  }, [load, loadGroups]);
+
+  React.useEffect(() => {
+    if (observedRefreshVersion.current === refreshVersion) return;
+    observedRefreshVersion.current = refreshVersion;
+    void load({ audiencePage, audienceSearch, threadSearch: search });
+    void loadGroups();
+  }, [audiencePage, audienceSearch, load, loadGroups, refreshVersion, search]);
 
   React.useEffect(() => {
     if (loading || routeStateApplied.current) return;
@@ -289,10 +312,10 @@ export default function MailCenterPage() {
     }
   }
 
-  async function findThreads() {
+  async function findThreads(query = search) {
     setBusy('search');
     try {
-      const result = await readJson<{ items: ThreadSummary[]; nextStartingAfter: string | null }>(`/api/mail/threads?limit=30&search=${encodeURIComponent(search)}`);
+      const result = await readJson<{ items: ThreadSummary[]; nextStartingAfter: string | null }>(`/api/mail/threads?limit=30&search=${encodeURIComponent(query)}`);
       setThreads(result.items);
       setThreadCursor(result.nextStartingAfter);
       setSelectedThread(null);
@@ -306,7 +329,7 @@ export default function MailCenterPage() {
     }
   }
 
-  async function openAffiliateInbox(item: Audience['items'][number]) {
+  async function openAffiliateInbox(item: MailAudienceItem) {
     if (!item.email) {
       toast.error('This affiliate has no email address.');
       return;
@@ -348,42 +371,70 @@ export default function MailCenterPage() {
     }
   }
 
-  async function configureCampaign() {
-    if (selectedSenders.length < 1) {
-      toast.error('Select at least one healthy sender account.');
-      return;
-    }
-    setBusy('campaign');
-    try {
-      await readJson('/api/mail/campaign', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirm: true, emailList: selectedSenders, dailyPerAccount: 30, dailyMaxLeads: 150, stopOnReply: true }),
-      });
-      toast.success('Draft campaign configured. No email was sent.');
-      await load();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Campaign configuration failed');
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function syncAudience() {
     setBusy('sync');
     try {
       const result = await readJson<{ imported: { synced?: number } | null }>('/api/mail/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirm: true, importNow: true }),
+        body: JSON.stringify({ confirm: true, importNow: true, includeExisting: true }),
       });
-      toast.success(`Rewardful audience reconciled${result.imported?.synced ? ` · ${result.imported.synced} imported` : ''}.`);
+      toast.success(`Audience reconciled${result.imported?.synced ? ` · ${result.imported.synced} added to this draft` : ''}.`);
       await Promise.all([loadAudience(1, audienceSearch), load()]);
       setAudiencePage(1);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Audience sync failed');
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function syncAudienceContact(item: MailAudienceItem) {
+    setBusy(`sync-${item.id}`);
+    try {
+      await readJson('/api/mail/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirm: true,
+          importNow: true,
+          includeExisting: true,
+          affiliateId: item.id,
+        }),
+      });
+      toast.success(`${item.name} reconciled with this Draft campaign.`);
+      await loadAudience(audiencePage, audienceSearch);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not sync this affiliate.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function selectAudienceGroup(group: AudienceGroup) {
+    setGroupBusy(true);
+    try {
+      const result = await readJson<{
+        safety?: string;
+        draftTarget?: AudienceGroupsPayload['draftTarget'];
+      }>('/api/mail/groups', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true, groupId: group.id }),
+      });
+      setGroups((current) => current ? {
+        ...current,
+        selectedGroupId: group.id,
+        draftTarget: result.draftTarget ?? current.draftTarget,
+        groups: current.groups.map((item) => ({ ...item, selected: item.id === group.id })),
+      } : current);
+      toast.success(`${group.label} selected for this draft.`, {
+        description: result.safety || 'No campaign was activated and no email was sent.',
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update the draft audience.');
+    } finally {
+      setGroupBusy(false);
     }
   }
 
@@ -417,35 +468,33 @@ export default function MailCenterPage() {
   const state = campaignState(overview.campaign.status);
   const totalPages = Math.max(1, Math.ceil(audience.page.total / audience.page.size));
   const selectedCapacity = selectedSenders.length * 30;
+  const reconciledContacts = audience.sync.reconciled ?? audience.sync.synced + audience.sync.skippedExisting;
+  const reconciliationPercent = (reconciledContacts / Math.max(1, audience.counts.emailable)) * 100;
   const latestMessage = thread?.messages.at(-1);
+  const selectedGroupId = groups?.selectedGroupId
+    ?? groups?.draftTarget?.groupId
+    ?? groups?.groups.find((group) => group.selected)?.id
+    ?? 'all_emailable';
   const replyRecipient = latestMessage?.emailType === 'received'
     ? latestMessage.from
     : latestMessage?.to;
 
   return (
-    <div className="grid gap-4 px-3 py-4 md:px-6 md:py-5">
-      <header className="flex min-h-12 flex-col gap-3 border-b pb-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <span className="grid size-10 place-items-center rounded-xl bg-foreground text-background"><MailCheck className="size-5" /></span>
-          <div><h1 className="text-xl font-semibold tracking-tight">Mail Center</h1><p className="text-xs text-muted-foreground">Rewardful + Instantly</p></div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2"><Badge variant={state.safe ? 'secondary' : 'destructive'}><ShieldCheck /> {state.label}</Badge><span className="hidden text-xs text-muted-foreground md:inline">{overview.campaign.name}</span><Button variant="outline" size="icon-sm" onClick={() => void load()} aria-label="Refresh Mail Center"><RefreshCw /></Button></div>
-      </header>
-
+    <div className="grid min-h-[calc(100dvh-4rem)] gap-3 px-3 py-3 md:px-5">
       <Tabs
         value={activeTab}
         onValueChange={(value) => {
           setActiveTab(value);
           updateRoute({ tab: value === 'dashboard' ? null : value, thread: value === 'inbox' ? selectedThread : null, contact: value === 'inbox' ? search || null : null });
         }}
-        className="min-w-0 gap-4"
+        className="grid min-h-[calc(100dvh-5.5rem)] min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-3"
       >
-        <TabsList className="grid h-auto w-full grid-cols-5 overflow-x-auto rounded-xl border bg-muted/30 p-1">
-          <TabsTrigger value="dashboard" className="h-10 min-w-28"><LayoutDashboard /> <span className="hidden sm:inline">Dashboard</span></TabsTrigger>
-          <TabsTrigger value="inbox" className="h-10 min-w-24"><Inbox /> <span className="hidden sm:inline">Inbox</span>{overview.unibox.unread > 0 && <Badge variant="destructive">{overview.unibox.unread}</Badge>}</TabsTrigger>
-          <TabsTrigger value="drafts" className="h-10 min-w-24"><FilePenLine /> <span className="hidden sm:inline">Drafts</span><Badge variant="secondary">{overview.campaign.steps}</Badge></TabsTrigger>
-          <TabsTrigger value="campaign" className="h-10 min-w-28"><Settings2 /> <span className="hidden sm:inline">Campaign</span></TabsTrigger>
-          <TabsTrigger value="audience" className="h-10 min-w-28"><Users /> <span className="hidden sm:inline">Audience</span><Badge variant="secondary">{audience.counts.total}</Badge></TabsTrigger>
+        <TabsList className="sticky top-[6.5rem] z-40 grid h-11 w-full grid-cols-5 overflow-x-auto rounded-xl border bg-background/90 p-1 shadow-xs backdrop-blur sm:top-16">
+          <TabsTrigger value="dashboard" className="h-8 min-w-24"><LayoutDashboard /> <span className="hidden sm:inline">Dashboard</span></TabsTrigger>
+          <TabsTrigger value="inbox" className="h-8 min-w-24"><Inbox /> <span className="hidden sm:inline">Inbox</span>{overview.unibox.unread > 0 && <Badge variant="destructive">{overview.unibox.unread}</Badge>}</TabsTrigger>
+          <TabsTrigger value="drafts" className="h-8 min-w-24"><FilePenLine /> <span className="hidden sm:inline">Drafts</span><Badge variant="secondary">{overview.campaign.steps}</Badge></TabsTrigger>
+          <TabsTrigger value="campaign" className="h-8 min-w-24"><Settings2 /> <span className="hidden sm:inline">Campaign</span></TabsTrigger>
+          <TabsTrigger value="audience" className="h-8 min-w-24"><Users /> <span className="hidden sm:inline">Audience</span><Badge variant="secondary">{audience.counts.total}</Badge></TabsTrigger>
         </TabsList>
 
         <TabsContent value="dashboard" className="grid gap-4">
@@ -453,7 +502,7 @@ export default function MailCenterPage() {
             <Stat label="Affiliate contacts" value={audience.counts.total.toLocaleString()} detail={`${audience.counts.emailable.toLocaleString()} can receive email`} />
             <Stat label="Unread replies" value={overview.unibox.unread.toLocaleString()} detail={overview.unibox.unread ? 'Needs review' : 'Inbox clear'} tone={overview.unibox.unread ? 'warn' : 'good'} />
             <Stat label="Send capacity" value={`${selectedCapacity}/day`} detail={`${selectedSenders.length} senders · 30/day each`} tone="good" />
-            <Stat label="Synced contacts" value={audience.sync.synced.toLocaleString()} detail={`${audience.sync.pending} pending · ${audience.sync.errors + audience.sync.emailChanged} issues`} tone={audience.sync.errors + audience.sync.emailChanged ? 'warn' : 'good'} />
+            <Stat label="Audience reconciled" value={`${reconciledContacts.toLocaleString()} / ${audience.counts.emailable.toLocaleString()}`} detail={`${audience.sync.synced.toLocaleString()} in campaign · ${audience.sync.skippedExisting.toLocaleString()} elsewhere`} tone={audience.sync.errors + audience.sync.emailChanged ? 'warn' : 'good'} />
           </section>
 
           <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,.65fr)]">
@@ -465,23 +514,23 @@ export default function MailCenterPage() {
             </CardContent></Card>
 
             <Card className="gap-0 py-0"><CardHeader className="border-b py-4"><CardTitle>System status</CardTitle></CardHeader><CardContent className="grid gap-4 py-5">
-              <div><div className="mb-2 flex items-center justify-between text-sm"><span>Contact reconciliation</span><strong>{Math.round((audience.sync.synced / Math.max(1, audience.sync.total)) * 100)}%</strong></div><Progress value={(audience.sync.synced / Math.max(1, audience.sync.total)) * 100} /></div>
+              <div><div className="mb-2 flex items-center justify-between text-sm"><span>Contact reconciliation</span><strong>{Math.round(reconciliationPercent)}%</strong></div><Progress value={reconciliationPercent} /></div>
               <div className="grid gap-2 text-sm"><div className="flex items-center justify-between border-b py-2"><span className="text-muted-foreground">Campaign</span><Badge variant={state.safe ? 'secondary' : 'destructive'}>{state.label}</Badge></div><div className="flex items-center justify-between border-b py-2"><span className="text-muted-foreground">Stop on reply</span><strong>{overview.campaign.stopOnReply ? 'On' : 'Off'}</strong></div><div className="flex items-center justify-between border-b py-2"><span className="text-muted-foreground">Daily lead limit</span><strong>{overview.campaign.dailyMaxLeads ?? 0}</strong></div><div className="flex items-center justify-between py-2"><span className="text-muted-foreground">Sender health</span><strong>{overview.accounts.items.filter((account) => account.status === 1 && !account.setupPending).length}/{overview.accounts.items.length} ready</strong></div></div>
             </CardContent></Card>
           </section>
 
-          <Card className="gap-0 overflow-hidden py-0"><CardHeader className="border-b py-4"><div><CardTitle>Recent conversations</CardTitle><CardDescription>Latest activity from Instantly</CardDescription></div><Button variant="outline" size="sm" onClick={() => setActiveTab('inbox')}>Open inbox <ArrowRight /></Button></CardHeader><CardContent className="p-0">{threads.slice(0, 5).map((item) => <button key={item.threadId} type="button" onClick={() => { setActiveTab('inbox'); void openThread(item.threadId); }} className="grid w-full gap-1 border-b px-4 py-3 text-left last:border-0 hover:bg-muted/30 sm:grid-cols-[minmax(0,1fr)_180px_100px] sm:items-center"><span><span className="block truncate text-sm font-medium">{item.subject}</span><span className="block truncate text-xs text-muted-foreground">{item.preview || 'No preview'}</span></span><span className="truncate text-xs text-muted-foreground">{item.emailType === 'received' ? item.from : item.to}</span><span className="text-xs text-muted-foreground sm:text-right">{formatDate(item.sentAt)}</span></button>)}{threads.length === 0 && <div className="p-8 text-center text-sm text-muted-foreground">No campaign conversations yet.</div>}</CardContent></Card>
+          <Card className="gap-0 overflow-hidden py-0"><CardHeader className="border-b py-4"><div><CardTitle>Recent conversations</CardTitle><CardDescription>Latest activity from Instantly</CardDescription></div><Button variant="outline" size="sm" onClick={() => setActiveTab('inbox')}>Open inbox <ArrowRight /></Button></CardHeader><CardContent className="p-0">{threads.slice(0, 5).map((item) => <button key={item.threadId} type="button" onClick={() => { setActiveTab('inbox'); void openThread(item.threadId); }} className="grid w-full gap-1 border-b px-4 py-3 text-left last:border-0 hover:bg-muted/30 sm:grid-cols-[minmax(0,1fr)_180px_100px] sm:items-center"><span><span className="block truncate text-sm font-medium">{item.subject}</span><span className="block truncate text-xs text-muted-foreground">{item.preview || 'No preview'}</span></span><span className="truncate text-xs text-muted-foreground">{item.emailType === 'received' ? item.from : item.to}</span><span className="text-xs text-muted-foreground sm:text-right">{formatDate(item.sentAt)}</span></button>)}{threads.length === 0 && <CompactEmptyState icon={Inbox} title="No conversations yet" detail="Replies will appear here after outreach begins." action="Review the draft" onAction={() => setActiveTab('drafts')} />}</CardContent></Card>
         </TabsContent>
 
-        <TabsContent value="inbox">
-          <div className="grid min-h-[680px] overflow-hidden rounded-xl border bg-background shadow-xs lg:grid-cols-[380px_minmax(0,1fr)]">
+        <TabsContent value="inbox" className="min-h-0">
+          <div className="grid h-full min-h-[calc(100dvh-8.75rem)] overflow-hidden rounded-xl border bg-background shadow-xs lg:grid-cols-[380px_minmax(0,1fr)]">
             <aside className={`${selectedThread ? 'hidden lg:block' : 'block'} border-b bg-muted/15 lg:border-b-0 lg:border-r`}>
               <div className="border-b p-4"><div className="mb-3 flex items-center justify-between"><div><h2 className="font-semibold">Inbox</h2><p className="text-xs text-muted-foreground">{overview.unibox.unread} unread</p></div><Button variant="ghost" size="icon-sm" onClick={() => void load()} aria-label="Refresh inbox"><RefreshCw /></Button></div><div className="flex gap-2">
                 <Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void findThreads(); }} placeholder="Search replies, subject, affiliate…" />
                 <Button size="icon-sm" variant="outline" onClick={() => void findThreads()} disabled={busy === 'search'} aria-label="Search mail"><Search /></Button>
                 {search && <Button size="icon-sm" variant="ghost" onClick={() => { setSearch(''); updateRoute({ contact: null }); setBusy('search'); void readJson<{ items: ThreadSummary[]; nextStartingAfter: string | null }>('/api/mail/threads?limit=30').then((result) => { setThreads(result.items); setThreadCursor(result.nextStartingAfter); }).catch((error) => toast.error(error instanceof Error ? error.message : 'Could not clear search')).finally(() => setBusy(null)); }} aria-label="Clear mail search"><X /></Button>}
               </div></div>
-              <ScrollArea className="h-[620px] lg:h-[560px]">
+              <ScrollArea className="h-[calc(100dvh-13.5rem)] min-h-[560px]">
                 {threads.map((item) => (
                   <button key={item.threadId} type="button" onClick={() => void openThread(item.threadId)} aria-current={selectedThread === item.threadId ? 'true' : undefined} className={`block w-full border-b px-4 py-3 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selectedThread === item.threadId ? 'bg-muted' : ''}`}>
                     <div className="flex items-center gap-2"><span className={`min-w-0 flex-1 truncate text-sm ${item.unread ? 'font-semibold' : 'font-medium'}`}>{item.subject}</span>{item.unread && <span className="size-2 rounded-full bg-blue-500" />}</div>
@@ -490,18 +539,18 @@ export default function MailCenterPage() {
                     <p className="mt-2 text-[10px] uppercase tracking-wide text-muted-foreground">{formatDate(item.sentAt)}</p>
                   </button>
                 ))}
-                {threads.length === 0 && <div className="p-10 text-center text-sm text-muted-foreground"><Inbox className="mx-auto mb-3 size-6" />{search ? `No conversation found for ${search}.` : 'No campaign conversations yet.'}</div>}
+                {threads.length === 0 && <CompactEmptyState icon={Search} title={search ? 'No matching conversation' : 'Inbox is ready'} detail={search ? `Nothing matched “${search}”.` : 'Affiliate replies will land here.'} action={search ? 'Clear search' : 'Review the draft'} onAction={() => { if (search) { setSearch(''); updateRoute({ contact: null }); void findThreads(''); } else { setActiveTab('drafts'); } }} />}
                 {threadCursor && <div className="p-3"><Button className="w-full" variant="outline" size="sm" onClick={() => void loadMoreThreads()} disabled={busy === 'more-threads'}>{busy === 'more-threads' ? <RefreshCw className="animate-spin" /> : <ArrowRight />} {busy === 'more-threads' ? 'Loading…' : 'Load more conversations'}</Button></div>}
               </ScrollArea>
             </aside>
 
             <section className={`${selectedThread ? 'block' : 'hidden lg:block'} min-w-0`}>
               {!selectedThread ? (
-                <div className="flex h-full min-h-[620px] items-center justify-center p-8 text-center"><div><MailPlus className="mx-auto size-8 text-muted-foreground" /><h2 className="mt-4 font-semibold">Select a conversation</h2><p className="mt-1 text-sm text-muted-foreground">Read the full thread and reply from an approved sender.</p></div></div>
+                <div className="p-4"><CompactEmptyState icon={MailPlus} title={threads.length ? 'Choose a conversation' : 'Nothing to read yet'} detail={threads.length ? 'Select a thread to read and reply.' : 'Review the draft while you wait for replies.'} action={threads.length ? undefined : 'Open sequence draft'} onAction={threads.length ? undefined : () => setActiveTab('drafts')} /></div>
               ) : threadError ? (
                 <div className="flex min-h-[560px] items-center justify-center p-8 text-center"><div><CircleAlert className="mx-auto size-8 text-destructive" /><h2 className="mt-4 font-semibold">Conversation unavailable</h2><p className="mt-1 text-sm text-muted-foreground">{threadError}</p><div className="mt-4 flex justify-center gap-2"><Button variant="outline" onClick={() => { setSelectedThread(null); setThreadError(null); updateRoute({ thread: null }); }}><ArrowLeft /> Back to inbox</Button><Button onClick={() => void openThread(selectedThread)}><RefreshCw /> Try again</Button></div></div></div>
               ) : !thread ? <div className="grid gap-3 p-6"><Skeleton className="h-16" /><Skeleton className="h-36" /><Skeleton className="h-36" /></div> : (
-                <div className="flex min-h-[620px] flex-col">
+                <div className="flex h-full min-h-[620px] flex-col">
                   <div className="flex items-center gap-3 border-b px-4 py-3 md:px-5 md:py-4"><Button className="lg:hidden" size="icon-sm" variant="ghost" onClick={() => { setSelectedThread(null); setThread(null); updateRoute({ thread: null }); }} aria-label="Back to inbox"><ArrowLeft /></Button><div className="min-w-0"><p className="text-xs uppercase tracking-[0.14em] text-muted-foreground">Conversation · {thread.messages.length} message{thread.messages.length === 1 ? '' : 's'}</p><h2 className="mt-1 truncate font-semibold">{thread.messages.at(-1)?.subject}</h2></div></div>
                   <ScrollArea className="h-[390px] flex-1 p-5">
                     <div className="grid gap-4 pr-4">{thread.messages.map((message) => <article key={message.id} className={`max-w-[88%] border p-4 ${message.emailType === 'received' ? 'mr-auto border-l-2 border-l-blue-500' : 'ml-auto border-r-2 border-r-emerald-500 bg-muted/20'}`}><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-semibold">{message.emailType === 'received' ? message.from : message.senderAccount || message.from}</p><span className="text-[10px] uppercase tracking-wide text-muted-foreground">{formatDate(message.sentAt)}</span></div><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground/85">{bodyText(message.body, message.preview)}</p></article>)}</div>
@@ -525,31 +574,69 @@ export default function MailCenterPage() {
         </TabsContent>
 
         <TabsContent value="drafts">
-          <SequenceDraftEditor onSaved={load} />
+          <div className="grid gap-3">
+            {groups ? (
+              <DraftAudiencePicker
+                payload={groups}
+                selectedGroupId={selectedGroupId}
+                onSelectedGroupChange={(group) => void selectAudienceGroup(group)}
+                disabled={groupBusy || !state.safe}
+              />
+            ) : <Skeleton className="h-16 w-full" />}
+            <SequenceDraftEditor onSaved={load} />
+          </div>
         </TabsContent>
 
         <TabsContent value="campaign">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <Card className="gap-0 py-0">
-              <CardHeader className="border-b py-4"><div><CardTitle>Approved sender pool</CardTitle><CardDescription>Use any number of healthy accounts. Capacity grows with every selected sender, while each account is capped at 30 emails/day.</CardDescription></div><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => setSelectedSenders(overview.accounts.items.filter((account) => account.status === 1 && !account.setupPending).map((account) => account.email))}>Select all ready</Button><Button variant="ghost" size="sm" onClick={() => setSelectedSenders([])}>Clear</Button></div></CardHeader>
-              <CardContent className="grid gap-px bg-border p-0 sm:grid-cols-2">{overview.accounts.items.map((account) => {
-                const selected = selectedSenders.includes(account.email);
-                const healthy = account.status === 1 && !account.setupPending;
-                return <label key={account.email} className="flex cursor-pointer items-start gap-3 bg-background p-4 hover:bg-muted/30"><Checkbox checked={selected} onCheckedChange={(checked) => setSelectedSenders((items) => checked ? [...new Set([...items, account.email])] : items.filter((email) => email !== account.email))} disabled={!healthy && !selected} /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-medium">{account.email}</p><Badge variant={healthy ? 'secondary' : 'destructive'}>{healthy ? 'ready' : 'attention'}</Badge></div><p className="mt-1 text-xs text-muted-foreground">Current limit {account.dailyLimit ?? 0}/day · warmup {account.warmupScore ?? '—'}%</p><Progress className="mt-3" value={Math.min(100, account.warmupScore ?? 0)} /></div></label>;
-              })}</CardContent>
-            </Card>
-            <div className="grid content-start gap-4">
-              <Card><CardHeader><CardTitle>Campaign limits</CardTitle><CardDescription>{overview.campaign.name}</CardDescription></CardHeader><CardContent className="grid gap-4"><div className="grid grid-cols-2 gap-3 text-sm"><div className="rounded-lg border p-3"><p className="text-muted-foreground">Selected</p><p className="mt-1 text-xl font-semibold">{selectedSenders.length} / {overview.accounts.items.filter((account) => account.status === 1 && !account.setupPending).length}</p></div><div className="rounded-lg border p-3"><p className="text-muted-foreground">Capacity</p><p className="mt-1 text-xl font-semibold">{selectedCapacity}/day</p></div></div><div className="grid gap-2 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">Per account</span><strong>30/day max</strong></div><div className="flex justify-between"><span className="text-muted-foreground">Stop on reply</span><strong>{overview.campaign.stopOnReply ? 'Enabled' : 'Disabled'}</strong></div><div className="flex justify-between"><span className="text-muted-foreground">Status</span><Badge variant={state.safe ? 'secondary' : 'destructive'}>{state.label}</Badge></div></div><Button onClick={() => void configureCampaign()} disabled={selectedSenders.length < 1 || !state.safe || busy === 'campaign'}><DatabaseZap /> {busy === 'campaign' ? 'Saving…' : 'Save sender configuration'}</Button></CardContent></Card>
-            </div>
+          <div className="grid gap-4">
+            {groups ? (
+              <AudienceGroups
+                payload={groups}
+                selectedGroupId={selectedGroupId}
+                onSelectedGroupChange={(group) => void selectAudienceGroup(group)}
+                disabled={groupBusy || !state.safe}
+              />
+            ) : <Skeleton className="h-[420px] w-full" />}
+            <CampaignSettings campaign={overview.campaign} accounts={overview.accounts.items} onSaved={load} />
           </div>
         </TabsContent>
 
         <TabsContent value="audience">
-          <Card className="gap-0 overflow-hidden py-0">
-            <CardHeader className="border-b py-4"><div><CardTitle>Audience</CardTitle><CardDescription>Rewardful contacts and Instantly conversation access</CardDescription></div><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" asChild><a href="/api/mail/affiliates.csv"><Download /> CSV</a></Button><Button size="sm" onClick={() => void syncAudience()} disabled={!state.safe || busy === 'sync'}><DatabaseZap /> {busy === 'sync' ? 'Syncing…' : 'Sync audience'}</Button></div></CardHeader>
-            <div className="flex flex-col gap-3 border-b bg-muted/15 p-3 sm:flex-row sm:items-center"><div className="relative max-w-md flex-1"><Search className="absolute left-2.5 top-2 size-4 text-muted-foreground" /><Input className="pl-8" placeholder="Search name or email" value={audienceSearch} onChange={(event) => setAudienceSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { setAudiencePage(1); updateRoute({ tab: 'audience', q: audienceSearch, page: null }); void loadAudience(1, audienceSearch); } }} /></div><Button variant="outline" size="sm" onClick={() => { setAudiencePage(1); updateRoute({ tab: 'audience', q: audienceSearch, page: null }); void loadAudience(1, audienceSearch); }}>Search</Button>{audienceSearch && <Button variant="ghost" size="sm" onClick={() => { setAudienceSearch(''); setAudiencePage(1); updateRoute({ tab: 'audience', q: null, page: null }); void loadAudience(1, ''); }}><X /> Clear</Button>}<p className="text-xs text-muted-foreground sm:ml-auto">{audience.counts.suspicious} suspicious · {audience.counts.unconfirmed} awaiting confirmation</p></div>
-            <CardContent className="p-0"><div className="overflow-x-auto"><table className="w-full min-w-[1080px] text-sm"><thead className="border-b bg-muted/20 text-left text-[11px] uppercase tracking-wide text-muted-foreground"><tr><th className="px-4 py-3">Affiliate</th><th className="px-3 py-3">Lifecycle</th><th className="px-3 py-3">Mail sync</th><th className="px-3 py-3 text-right">Visitors</th><th className="px-3 py-3 text-right">Paid</th><th className="px-3 py-3 text-right">Due</th><th className="px-3 py-3 text-right">Risk</th><th className="px-4 py-3 text-right">Conversation</th></tr></thead><tbody>{audience.items.map((item) => <tr key={item.id} className="border-b last:border-0 hover:bg-muted/20"><td className="px-4 py-3"><p className="font-medium">{item.name}</p><p className="text-xs text-muted-foreground">{item.email || 'No email'}</p></td><td className="px-3 py-3"><Badge variant="outline">{item.segment.replaceAll('_', ' ')}</Badge></td><td className="px-3 py-3"><Badge variant={item.syncStatus === 'synced' ? 'secondary' : item.syncStatus === 'error' || item.syncStatus === 'email_changed' ? 'destructive' : 'outline'}>{item.syncStatus.replaceAll('_', ' ')}</Badge>{item.syncError && <p className="mt-1 max-w-xs truncate text-[10px] text-destructive">{item.syncError}</p>}</td><td className="px-3 py-3 text-right tabular-nums">{item.visitors.toLocaleString()}</td><td className="px-3 py-3 text-right font-medium tabular-nums">{item.conversions.toLocaleString()}</td><td className="px-3 py-3 text-right tabular-nums">{money.format(item.unpaidCommissionCents / 100)}</td><td className="px-3 py-3 text-right"><Badge variant={item.riskScore >= 60 ? 'destructive' : 'secondary'}>{item.riskScore}</Badge></td><td className="px-4 py-3 text-right"><Button variant="outline" size="sm" disabled={!item.email || busy === 'contact-inbox'} onClick={() => void openAffiliateInbox(item)}><Inbox /> Open</Button></td></tr>)}</tbody></table></div>{audience.items.length === 0 && <div className="p-10 text-center text-sm text-muted-foreground">No affiliates match this search.</div>}<div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><p className="text-xs text-muted-foreground">Showing {(audience.page.number - 1) * audience.page.size + (audience.items.length ? 1 : 0)}–{(audience.page.number - 1) * audience.page.size + audience.items.length} of {audience.page.total.toLocaleString()}</p><div className="flex items-center gap-2"><Button variant="outline" size="icon-sm" disabled={audiencePage <= 1} onClick={() => { const next = audiencePage - 1; setAudiencePage(next); updateRoute({ tab: 'audience', q: audienceSearch, page: next }); void loadAudience(next, audienceSearch); }} aria-label="Previous audience page"><ArrowLeft /></Button><span className="text-xs tabular-nums">Page {audiencePage} / {totalPages}</span><Button variant="outline" size="icon-sm" disabled={audiencePage >= totalPages} onClick={() => { const next = audiencePage + 1; setAudiencePage(next); updateRoute({ tab: 'audience', q: audienceSearch, page: next }); void loadAudience(next, audienceSearch); }} aria-label="Next audience page"><ArrowRight /></Button></div></div></CardContent>
-          </Card>
+          <AudienceWorkspace
+            audience={audience}
+            query={audienceSearch}
+            page={audiencePage}
+            totalPages={totalPages}
+            busy={busy}
+            campaignSafe={state.safe}
+            onQueryChange={setAudienceSearch}
+            onSearch={() => {
+              setAudiencePage(1);
+              updateRoute({ tab: 'audience', q: audienceSearch, page: null });
+              void loadAudience(1, audienceSearch);
+            }}
+            onClear={() => {
+              setAudienceSearch('');
+              setAudiencePage(1);
+              updateRoute({ tab: 'audience', q: null, page: null });
+              void loadAudience(1, '');
+            }}
+            onSyncAll={() => void syncAudience()}
+            onSyncContact={(item) => void syncAudienceContact(item)}
+            onOpenInbox={(item) => void openAffiliateInbox(item)}
+            onPreviousPage={() => {
+              const next = audiencePage - 1;
+              setAudiencePage(next);
+              updateRoute({ tab: 'audience', q: audienceSearch, page: next });
+              void loadAudience(next, audienceSearch);
+            }}
+            onNextPage={() => {
+              const next = audiencePage + 1;
+              setAudiencePage(next);
+              updateRoute({ tab: 'audience', q: audienceSearch, page: next });
+              void loadAudience(next, audienceSearch);
+            }}
+          />
         </TabsContent>
       </Tabs>
 

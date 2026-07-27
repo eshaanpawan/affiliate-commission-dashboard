@@ -16,7 +16,10 @@ interface ClaimedContact {
   affiliate_id: string;
   email: string;
   sync_attempts: number;
+  previous_status: string;
 }
+
+class CampaignStateChangedError extends Error {}
 
 function safeError(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).replace(/[\r\n]+/g, ' ').slice(0, 500);
@@ -42,23 +45,34 @@ async function recordEvent(
  * Imports queued contacts into Instantly only while the campaign is Draft (0)
  * or Paused (2). This function cannot activate a campaign or send an email.
  */
-export async function drainOutreachQueue(options: { limit?: number } = {}) {
+export async function drainOutreachQueue(options: {
+  limit?: number;
+  includeExisting?: boolean;
+  affiliateId?: string;
+} = {}) {
   const campaignId = affiliateCampaignId();
   const limit = Math.min(1_000, Math.max(1, options.limit ?? 500));
+  const includeExisting = options.includeExisting === true;
+  const affiliateId = options.affiliateId?.trim() || null;
   const campaign = await getCampaign(campaignId);
   if (campaign.status !== 0 && campaign.status !== 2) {
     throw new Error('Contact import blocked: affiliate campaign must remain Draft or Paused.');
   }
+  if (includeExisting && campaign.status !== 0) {
+    throw new Error('Existing-workspace contact import is allowed only while the affiliate campaign is Draft.');
+  }
 
   const claimed = await sql`
     WITH candidates AS (
-      SELECT id
+      SELECT id, sync_status AS previous_status
       FROM outreach_contacts
       WHERE campaign_id = ${campaignId}
-        AND sync_attempts < 5
+        AND (${affiliateId}::text IS NULL OR affiliate_id = ${affiliateId})
+        AND (sync_attempts < 5 OR (${includeExisting} AND sync_status = 'skipped_existing'))
         AND (
           sync_status = 'pending'
           OR (sync_status = 'error' AND COALESCE(next_attempt_at, NOW()) <= NOW())
+          OR (${includeExisting} AND sync_status = 'skipped_existing')
         )
       ORDER BY updated_at ASC, id ASC
       LIMIT ${limit}
@@ -69,14 +83,15 @@ export async function drainOutreachQueue(options: { limit?: number } = {}) {
         sync_attempts = contact.sync_attempts + 1, updated_at = NOW()
     FROM candidates
     WHERE contact.id = candidates.id
-    RETURNING contact.id, contact.affiliate_id, contact.email, contact.sync_attempts
+    RETURNING contact.id, contact.affiliate_id, contact.email,
+      contact.sync_attempts, candidates.previous_status
   ` as unknown as ClaimedContact[];
 
   if (claimed.length === 0) {
     return { campaignId, campaignStatus: campaign.status, claimed: 0, synced: 0, errors: 0 };
   }
 
-  const currentCandidates = await getOutreachCandidates();
+  const currentCandidates = await getOutreachCandidates(affiliateId ?? undefined);
   const byAffiliate = new Map(currentCandidates.map((candidate) => [candidate.affiliateId, candidate]));
   const valid: { contact: ClaimedContact; lead: AddLeadInput }[] = [];
   const invalid: ClaimedContact[] = [];
@@ -105,11 +120,22 @@ export async function drainOutreachQueue(options: { limit?: number } = {}) {
   }
 
   try {
+    // Re-check immediately before the remote write. Candidate hydration and DB
+    // claims can take long enough for a human to change campaign state.
+    const currentCampaign = await getCampaign(campaignId);
+    if (currentCampaign.status !== 0 && currentCampaign.status !== 2) {
+      throw new CampaignStateChangedError('Contact import cancelled because the campaign is no longer Draft or Paused.');
+    }
+    if (includeExisting && currentCampaign.status !== 0) {
+      throw new CampaignStateChangedError('Existing-workspace contact import cancelled because the campaign is no longer Draft.');
+    }
     const result = await bulkAddLeads({
       campaignId,
       leads: valid.map((item) => item.lead),
-      // Avoid placing an address in multiple concurrent Instantly campaigns.
-      skipIfInWorkspace: true,
+      // Default reconciliation avoids duplicates across the workspace. An
+      // explicitly confirmed includeExisting run is the only path that can
+      // place a workspace-existing address into this Draft campaign.
+      skipIfInWorkspace: !includeExisting,
     });
     const resultRecord = result && typeof result === 'object' && !Array.isArray(result)
       ? result as Record<string, JsonValue>
@@ -177,12 +203,14 @@ export async function drainOutreachQueue(options: { limit?: number } = {}) {
       uploaded,
       skippedExisting,
       skippedForReview: invalid.length,
-      campaignStatus: campaign.status,
+      campaignStatus: currentCampaign.status,
+      includeExisting,
       remote: result,
     });
     return {
       campaignId,
-      campaignStatus: campaign.status,
+      campaignStatus: currentCampaign.status,
+      includeExisting,
       claimed: claimed.length,
       synced: uploaded,
       skippedExisting,
@@ -190,6 +218,23 @@ export async function drainOutreachQueue(options: { limit?: number } = {}) {
     };
   } catch (error) {
     const message = safeError(error);
+    if (error instanceof CampaignStateChangedError) {
+      await sql`
+        UPDATE outreach_contacts AS contact
+        SET sync_status = incoming.previous_status,
+            sync_error = ${message}, updated_at = NOW()
+        FROM unnest(
+          ${valid.map((item) => item.contact.id)}::uuid[],
+          ${valid.map((item) => item.contact.previous_status)}::text[]
+        ) AS incoming(id, previous_status)
+        WHERE contact.id = incoming.id
+      `;
+      await recordEvent(campaignId, 'instantly_contacts_import_cancelled', 'error', {
+        contacts: valid.length,
+        message,
+      });
+      throw error;
+    }
     for (const item of valid) {
       const delayMinutes = retryDelayMinutes(item.contact.sync_attempts);
       await sql`
@@ -208,14 +253,23 @@ export async function drainOutreachQueue(options: { limit?: number } = {}) {
   }
 }
 
-export async function drainOutreachQueueFully(options: { maxBatches?: number; batchSize?: number } = {}) {
+export async function drainOutreachQueueFully(options: {
+  maxBatches?: number;
+  batchSize?: number;
+  includeExisting?: boolean;
+  affiliateId?: string;
+} = {}) {
   const maxBatches = Math.min(10, Math.max(1, options.maxBatches ?? 5));
   const batches = [];
   let synced = 0;
   let skippedExisting = 0;
   let errors = 0;
   for (let index = 0; index < maxBatches; index += 1) {
-    const batch = await drainOutreachQueue({ limit: options.batchSize ?? 1_000 });
+    const batch = await drainOutreachQueue({
+      limit: options.batchSize ?? 1_000,
+      includeExisting: options.includeExisting,
+      affiliateId: options.affiliateId,
+    });
     batches.push(batch);
     synced += batch.synced;
     skippedExisting += 'skippedExisting' in batch ? Number(batch.skippedExisting ?? 0) : 0;

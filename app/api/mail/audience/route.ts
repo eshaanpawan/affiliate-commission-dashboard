@@ -18,12 +18,12 @@ export async function GET(req: Request) {
   const [counts, rows, queue] = await Promise.all([
     sql`
       SELECT
-        COUNT(*) FILTER (WHERE status <> 'deleted')::int AS total,
+        COUNT(*) FILTER (WHERE COALESCE(status, 'active') <> 'deleted')::int AS total,
         COUNT(*) FILTER (WHERE status = 'active')::int AS active,
         COUNT(*) FILTER (WHERE status = 'suspicious')::int AS suspicious,
-        COUNT(*) FILTER (WHERE status <> 'deleted' AND confirmed_at IS NULL)::int AS unconfirmed,
+        COUNT(*) FILTER (WHERE COALESCE(status, 'active') <> 'deleted' AND confirmed_at IS NULL)::int AS unconfirmed,
         COUNT(*) FILTER (
-          WHERE status <> 'deleted'
+          WHERE COALESCE(status, 'active') <> 'deleted'
             AND email ~* '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'
         )::int AS emailable
       FROM affiliates
@@ -33,6 +33,8 @@ export async function GET(req: Request) {
         a.rewardful_id, a.first_name, a.last_name, a.email, a.status,
         a.confirmed_at, a.created_at, a.visitors, a.leads, a.conversions,
         a.unpaid_commission_cents, a.risk_score, a.review_status,
+        a.updated_at AS source_updated_at,
+        conversion.last_conversion_at,
         COALESCE(o.segment, CASE WHEN a.confirmed_at IS NULL THEN 'verification_pending' ELSE 'onboarding' END) AS segment,
         COALESCE(o.sync_status, 'not_queued') AS sync_status,
         o.sync_error, o.last_synced_at
@@ -40,7 +42,13 @@ export async function GET(req: Request) {
       LEFT JOIN outreach_contacts o
         ON o.affiliate_id = a.rewardful_id
        AND o.campaign_id = ${process.env.INSTANTLY_AFFILIATE_CAMPAIGN_ID || '2fc18ca4-4de3-41e4-be9a-b7c17211010d'}
-      WHERE a.status <> 'deleted'
+      LEFT JOIN (
+        SELECT affiliate_id, MAX(COALESCE(converted_at, created_at)) AS last_conversion_at
+        FROM referrals
+        WHERE affiliate_id IS NOT NULL AND status = 'converted'
+        GROUP BY affiliate_id
+      ) conversion ON conversion.affiliate_id = a.rewardful_id
+      WHERE COALESCE(a.status, 'active') <> 'deleted'
         AND (${query} = '' OR LOWER(CONCAT_WS(' ', a.first_name, a.last_name, a.email)) LIKE ${pattern})
       ORDER BY
         CASE COALESCE(o.sync_status, 'not_queued')
@@ -53,10 +61,11 @@ export async function GET(req: Request) {
   const [filtered] = await sql`
     SELECT COUNT(*)::int AS count
     FROM affiliates a
-    WHERE a.status <> 'deleted'
+    WHERE COALESCE(a.status, 'active') <> 'deleted'
       AND (${query} = '' OR LOWER(CONCAT_WS(' ', a.first_name, a.last_name, a.email)) LIKE ${pattern})
   `;
 
+  const reconciliationResolved = queue.synced + queue.skippedExisting;
   return mailJson({
     counts: {
       total: Number(counts[0]?.total ?? 0),
@@ -66,6 +75,18 @@ export async function GET(req: Request) {
       emailable: Number(counts[0]?.emailable ?? 0),
     },
     sync: queue,
+    reconciliation: {
+      total: queue.total,
+      resolved: reconciliationResolved,
+      inCampaign: queue.synced,
+      existingElsewhere: queue.skippedExisting,
+      needsAttention: queue.pending + queue.syncing + queue.errors
+        + queue.emailChanged + queue.skippedExisting,
+      requiresCampaignImport: queue.skippedExisting,
+      percent: queue.total > 0 ? queue.synced / queue.total : 1,
+      resolvedPercent: queue.total > 0 ? reconciliationResolved / queue.total : 1,
+      lastSyncedAt: queue.lastSyncedAt,
+    },
     page: { number: page, size: pageSize, total: Number(filtered?.count ?? 0) },
     items: rows.map((row) => ({
       id: String(row.rewardful_id),
@@ -74,6 +95,8 @@ export async function GET(req: Request) {
       status: String(row.status ?? 'active'),
       confirmedAt: row.confirmed_at ? String(row.confirmed_at) : null,
       joinedAt: row.created_at ? String(row.created_at) : null,
+      lastConversionAt: row.last_conversion_at ? String(row.last_conversion_at) : null,
+      sourceUpdatedAt: row.source_updated_at ? String(row.source_updated_at) : null,
       visitors: Number(row.visitors ?? 0),
       leads: Number(row.leads ?? 0),
       conversions: Number(row.conversions ?? 0),
