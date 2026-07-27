@@ -42,8 +42,8 @@ export async function PATCH(req: Request) {
   const emailList = Array.isArray(body.emailList)
     ? [...new Set(body.emailList.map((email) => String(email).trim().toLowerCase()))]
     : [];
-  if (emailList.length !== 5 || emailList.some((email) => !approved.has(email))) {
-    return mailJson({ error: 'Choose exactly five approved sender accounts.' }, 400);
+  if (emailList.length < 1 || emailList.length > approved.size || emailList.some((email) => !approved.has(email))) {
+    return mailJson({ error: 'Choose one or more approved sender accounts.' }, 400);
   }
   const dailyPerAccount = Math.max(1, Math.min(30, Number(body.dailyPerAccount ?? 30)));
   const capacity = dailyPerAccount * emailList.length;

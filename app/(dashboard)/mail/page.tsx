@@ -219,7 +219,6 @@ export default function MailCenterPage() {
       const recommended = [...nextOverview.accounts.items]
         .filter((account) => account.status === 1 && !account.setupPending)
         .sort((a, b) => (b.dailyLimit ?? 0) - (a.dailyLimit ?? 0))
-        .slice(0, 5)
         .map((account) => account.email);
       setSelectedSenders(configured.length > 0 ? configured : recommended);
       setReplySender((current) => current || configured[0] || recommended[0] || '');
@@ -324,8 +323,8 @@ export default function MailCenterPage() {
   }
 
   async function configureCampaign() {
-    if (selectedSenders.length !== 5) {
-      toast.error('Select exactly five sender accounts for the 150/day plan.');
+    if (selectedSenders.length < 1) {
+      toast.error('Select at least one healthy sender account.');
       return;
     }
     setBusy('campaign');
@@ -414,7 +413,7 @@ export default function MailCenterPage() {
       <section className="grid border-y sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="Rewardful audience" value={audience.counts.total.toLocaleString()} detail={`${audience.counts.emailable.toLocaleString()} valid email addresses`} />
         <Stat label="Inbox requiring review" value={overview.unibox.unread.toLocaleString()} detail="Unread Instantly conversations" tone={overview.unibox.unread ? 'warn' : 'good'} />
-        <Stat label="Draft send capacity" value={`${selectedCapacity}/day`} detail={`${selectedSenders.length} selected · 30 per sender`} tone={selectedSenders.length === 5 ? 'good' : 'warn'} />
+        <Stat label="Draft send capacity" value={`${selectedCapacity}/day`} detail={`${selectedSenders.length} selected · maximum 30 per sender`} tone={selectedSenders.length > 0 ? 'good' : 'warn'} />
         <Stat label="Contact reconciliation" value={`${audience.sync.synced.toLocaleString()} / ${audience.sync.total.toLocaleString()}`} detail={`${audience.sync.pending} queued · ${audience.sync.skippedExisting} existing/protected · ${audience.sync.errors + audience.sync.emailChanged} need review`} tone={audience.sync.errors + audience.sync.emailChanged ? 'warn' : 'plain'} />
       </section>
 
@@ -487,15 +486,15 @@ export default function MailCenterPage() {
         <TabsContent value="campaign">
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
             <Card className="gap-0 py-0">
-              <CardHeader className="border-b py-4"><CardTitle>Approved sender pool</CardTitle><CardDescription>Select exactly five healthy accounts for 30 emails/day each. These are the only addresses the backend accepts.</CardDescription></CardHeader>
+              <CardHeader className="border-b py-4"><div><CardTitle>Approved sender pool</CardTitle><CardDescription>Use any number of healthy accounts. Capacity grows with every selected sender, while each account is capped at 30 emails/day.</CardDescription></div><div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" onClick={() => setSelectedSenders(overview.accounts.items.filter((account) => account.status === 1 && !account.setupPending).map((account) => account.email))}>Select all ready</Button><Button variant="ghost" size="sm" onClick={() => setSelectedSenders([])}>Clear</Button></div></CardHeader>
               <CardContent className="grid gap-px bg-border p-0 sm:grid-cols-2">{overview.accounts.items.map((account) => {
                 const selected = selectedSenders.includes(account.email);
                 const healthy = account.status === 1 && !account.setupPending;
-                return <label key={account.email} className="flex cursor-pointer items-start gap-3 bg-background p-4 hover:bg-muted/30"><Checkbox checked={selected} onCheckedChange={(checked) => setSelectedSenders((items) => checked ? [...new Set([...items, account.email])] : items.filter((email) => email !== account.email))} disabled={(!healthy && !selected) || (!selected && selectedSenders.length >= 5)} /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-medium">{account.email}</p><Badge variant={healthy ? 'secondary' : 'destructive'}>{healthy ? 'ready' : 'attention'}</Badge></div><p className="mt-1 text-xs text-muted-foreground">Current limit {account.dailyLimit ?? 0}/day · warmup {account.warmupScore ?? '—'}%</p><Progress className="mt-3" value={Math.min(100, account.warmupScore ?? 0)} /></div></label>;
+                return <label key={account.email} className="flex cursor-pointer items-start gap-3 bg-background p-4 hover:bg-muted/30"><Checkbox checked={selected} onCheckedChange={(checked) => setSelectedSenders((items) => checked ? [...new Set([...items, account.email])] : items.filter((email) => email !== account.email))} disabled={!healthy && !selected} /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-sm font-medium">{account.email}</p><Badge variant={healthy ? 'secondary' : 'destructive'}>{healthy ? 'ready' : 'attention'}</Badge></div><p className="mt-1 text-xs text-muted-foreground">Current limit {account.dailyLimit ?? 0}/day · warmup {account.warmupScore ?? '—'}%</p><Progress className="mt-3" value={Math.min(100, account.warmupScore ?? 0)} /></div></label>;
               })}</CardContent>
             </Card>
             <div className="grid content-start gap-4">
-              <Card><CardHeader><CardTitle>Safe campaign configuration</CardTitle><CardDescription>The setup writes accounts and limits, but does not activate or send.</CardDescription></CardHeader><CardContent className="grid gap-4"><div className="grid grid-cols-2 gap-3 text-sm"><div className="border p-3"><p className="text-muted-foreground">Selected</p><p className="mt-1 text-xl font-semibold">{selectedSenders.length} / 5</p></div><div className="border p-3"><p className="text-muted-foreground">Capacity</p><p className="mt-1 text-xl font-semibold">{selectedCapacity}/day</p></div></div><div className="flex items-start gap-2 border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed"><CircleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" /><span>Email copy is not approved yet. The campaign must stay <strong>Draft</strong>; contact import cannot trigger delivery.</span></div><Button onClick={() => void configureCampaign()} disabled={selectedSenders.length !== 5 || !state.safe || busy === 'campaign'}><DatabaseZap /> {busy === 'campaign' ? 'Configuring…' : 'Apply 5 × 30 draft setup'}</Button></CardContent></Card>
+              <Card><CardHeader><CardTitle>Safe campaign configuration</CardTitle><CardDescription>The setup writes accounts and limits, but does not activate or send.</CardDescription></CardHeader><CardContent className="grid gap-4"><div className="grid grid-cols-2 gap-3 text-sm"><div className="border p-3"><p className="text-muted-foreground">Selected</p><p className="mt-1 text-xl font-semibold">{selectedSenders.length} / {overview.accounts.items.filter((account) => account.status === 1 && !account.setupPending).length} ready</p></div><div className="border p-3"><p className="text-muted-foreground">Capacity</p><p className="mt-1 text-xl font-semibold">{selectedCapacity}/day</p></div></div><div className="flex items-start gap-2 border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed"><CircleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" /><span>Every account is capped at <strong>30/day</strong>. The campaign must stay <strong>Draft</strong>; contact import cannot trigger delivery.</span></div><Button onClick={() => void configureCampaign()} disabled={selectedSenders.length < 1 || !state.safe || busy === 'campaign'}><DatabaseZap /> {busy === 'campaign' ? 'Configuring…' : `Apply ${selectedSenders.length} × 30 draft setup`}</Button></CardContent></Card>
               <Card><CardHeader><CardTitle>Sequence readiness</CardTitle></CardHeader><CardContent className="grid gap-2 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">Steps</span><strong>{overview.campaign.steps}</strong></div><div className="flex justify-between"><span className="text-muted-foreground">Variants</span><strong>{overview.campaign.variants}</strong></div><div className="flex justify-between"><span className="text-muted-foreground">Daily max leads</span><strong>{overview.campaign.dailyMaxLeads ?? 0}</strong></div><Badge variant="destructive" className="mt-2">Copy approval required before launch</Badge></CardContent></Card>
             </div>
           </div>
