@@ -45,6 +45,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { SequenceDraftEditor } from '@/components/mail/sequence-draft-editor';
 
 type ThreadSummary = {
   id: string;
@@ -497,6 +498,9 @@ export default function MailCenterPage() {
               <Card><CardHeader><CardTitle>Safe campaign configuration</CardTitle><CardDescription>The setup writes accounts and limits, but does not activate or send.</CardDescription></CardHeader><CardContent className="grid gap-4"><div className="grid grid-cols-2 gap-3 text-sm"><div className="border p-3"><p className="text-muted-foreground">Selected</p><p className="mt-1 text-xl font-semibold">{selectedSenders.length} / 5</p></div><div className="border p-3"><p className="text-muted-foreground">Capacity</p><p className="mt-1 text-xl font-semibold">{selectedCapacity}/day</p></div></div><div className="flex items-start gap-2 border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-relaxed"><CircleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" /><span>Email copy is not approved yet. The campaign must stay <strong>Draft</strong>; contact import cannot trigger delivery.</span></div><Button onClick={() => void configureCampaign()} disabled={selectedSenders.length !== 5 || !state.safe || busy === 'campaign'}><DatabaseZap /> {busy === 'campaign' ? 'Configuring…' : 'Apply 5 × 30 draft setup'}</Button></CardContent></Card>
               <Card><CardHeader><CardTitle>Sequence readiness</CardTitle></CardHeader><CardContent className="grid gap-2 text-sm"><div className="flex justify-between"><span className="text-muted-foreground">Steps</span><strong>{overview.campaign.steps}</strong></div><div className="flex justify-between"><span className="text-muted-foreground">Variants</span><strong>{overview.campaign.variants}</strong></div><div className="flex justify-between"><span className="text-muted-foreground">Daily max leads</span><strong>{overview.campaign.dailyMaxLeads ?? 0}</strong></div><Badge variant="destructive" className="mt-2">Copy approval required before launch</Badge></CardContent></Card>
             </div>
+          </div>
+          <div className="mt-4">
+            <SequenceDraftEditor onSaved={load} />
           </div>
         </TabsContent>
 
