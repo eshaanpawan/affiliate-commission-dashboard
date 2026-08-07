@@ -23,7 +23,7 @@ export function DashboardRangeProvider({ children }: { children: React.ReactNode
   const searchParams = useSearchParams();
   const queryRange = searchParams.get('range');
   const [range, setRangeState] = React.useState<DashboardRange>(() =>
-    isDashboardRange(queryRange) ? queryRange : 'all',
+    isDashboardRange(queryRange) ? queryRange : '7d',
   );
   const [refreshVersion, setRefreshVersion] = React.useState(0);
   const [syncing, setSyncing] = React.useState(false);
@@ -35,7 +35,7 @@ export function DashboardRangeProvider({ children }: { children: React.ReactNode
   const setRange = React.useCallback((next: DashboardRange) => {
     setRangeState(next);
     const params = new URLSearchParams(searchParams.toString());
-    if (next === 'all') params.delete('range');
+    if (next === '7d') params.delete('range');
     else params.set('range', next);
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
