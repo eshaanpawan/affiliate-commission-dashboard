@@ -28,10 +28,11 @@ export function GlobalRangeTabs({ value, onChange }: {
   );
 }
 
-export function ChartRangeTabs({ value, globalRange, onChange }: {
+export function ChartRangeTabs({ value, globalRange, onChange, ranges = DASHBOARD_RANGES }: {
   value: DashboardRange | null;
   globalRange: DashboardRange;
   onChange: (value: DashboardRange | null) => void;
+  ranges?: readonly DashboardRange[];
 }) {
   return (
     <div className="flex items-center gap-1.5">
@@ -56,7 +57,7 @@ export function ChartRangeTabs({ value, globalRange, onChange }: {
         onValueChange={(next) => onChange(next as DashboardRange)}
       >
         <TabsList aria-label="Chart reporting window" className="h-8">
-          {DASHBOARD_RANGES.map((range) => (
+          {ranges.map((range) => (
             <TabsTrigger key={range} value={range} className="h-7 px-2 text-[11px]">
               {DASHBOARD_RANGE_LABELS[range]}
             </TabsTrigger>

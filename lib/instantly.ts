@@ -549,6 +549,31 @@ export function patchCampaign(
   });
 }
 
+/**
+ * Starts real email delivery for the campaign. Only call from the explicitly
+ * confirmed launch endpoint — this is the single place the app sends mass email.
+ */
+export function activateCampaign(campaignId: string): Promise<JsonValue> {
+  return instantlyFetch(`/campaigns/${encodeURIComponent(campaignId)}/activate`, {
+    method: 'POST',
+    retry: false,
+  });
+}
+
+export function pauseCampaign(campaignId: string): Promise<JsonValue> {
+  return instantlyFetch(`/campaigns/${encodeURIComponent(campaignId)}/pause`, {
+    method: 'POST',
+    retry: false,
+  });
+}
+
+export function deleteLead(leadId: string): Promise<JsonValue> {
+  return instantlyFetch(`/leads/${encodeURIComponent(leadId)}`, {
+    method: 'DELETE',
+    retry: false,
+  });
+}
+
 export function patchAccount(
   accountEmail: string,
   patch: Record<string, JsonValue | undefined>,

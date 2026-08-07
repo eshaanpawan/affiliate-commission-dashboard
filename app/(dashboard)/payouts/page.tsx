@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Banknote, CheckCircle2, Loader2, PauseCircle, RefreshCw, XCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, PauseCircle, RefreshCw, ShieldAlert, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
@@ -11,11 +11,14 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { PageControls } from '@/components/PageControls';
+import { ExpandableRows } from '@/components/ExpandableRows';
 
 interface Hold {
   id: string;
@@ -47,10 +50,16 @@ interface SourcePayout {
 
 const fmtUsd = (c: number) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function statusBadge(s: string) {
-  return s === 'held' ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
-    : s === 'released' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
-    : 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300';
+const BADGE_GREEN = 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400';
+const BADGE_AMBER = 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400';
+const BADGE_RED = 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400';
+
+function holdBadgeClass(s: string) {
+  return s === 'held' ? BADGE_AMBER : s === 'released' ? BADGE_GREEN : BADGE_RED;
+}
+
+function payoutBadgeClass(s: string) {
+  return s === 'paid' ? BADGE_GREEN : s === 'failed' ? BADGE_RED : BADGE_AMBER;
 }
 
 export default function PayoutReviewPage() {
@@ -113,10 +122,19 @@ export default function PayoutReviewPage() {
       .sort((a, b) => b.amountCents - a.amountCents);
   }, [holds, filter, search]);
 
-  const heldTotal = (holds ?? []).filter(h => h.status === 'held').reduce((s, h) => s + h.amountCents, 0);
+  const heldRows = (holds ?? []).filter(h => h.status === 'held');
+  const heldTotal = heldRows.reduce((s, h) => s + h.amountCents, 0);
+
+  const buckets = [
+    { label: 'Due / pending', rows: (payouts ?? []).filter((p) => ['created', 'pending', 'due'].includes(p.status)) },
+    { label: 'Processing', rows: (payouts ?? []).filter((p) => p.status === 'processing') },
+    { label: 'Paid', rows: (payouts ?? []).filter((p) => p.status === 'paid') },
+    { label: 'On fraud hold', rows: (payouts ?? []).filter((p) => p.holdStatus === 'held') },
+  ].map((b) => ({ ...b, cents: b.rows.reduce((sum, payout) => sum + payout.amountCents, 0) }));
+  const maxBucket = Math.max(...buckets.map((b) => b.cents), heldTotal, 1);
 
   return (
-    <div className="grid gap-6 p-6">
+    <div className="@container/main mx-auto w-full max-w-[112rem] space-y-4 px-4 py-6 md:px-6">
       {confirmVoid && (
         <AlertDialog open onOpenChange={(o) => { if (!o) setConfirmVoid(null); }}>
           <AlertDialogContent>
@@ -141,35 +159,53 @@ export default function PayoutReviewPage() {
         </AlertDialog>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Header */}
+      <div className="flex flex-row flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold">
-            <Banknote className="size-6 text-amber-500" /> Payout Review
-          </h1>
-          <p className="text-muted-foreground text-sm">
+          <h1 className="text-xl font-bold tracking-tight lg:text-2xl">Payout Review</h1>
+          <p className="text-muted-foreground mt-0.5 text-sm">
             Reconcile Rewardful payout state with local fraud holds before any payment is approved.
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={load} disabled={loading}>
-          <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} /> Refresh
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <PageControls />
+          <Button size="sm" variant="outline" onClick={load} disabled={loading}>
+            <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} /> Refresh
+          </Button>
+        </div>
       </div>
 
-      <Card className="gap-1 border-amber-200 bg-amber-50/60 py-4 dark:border-amber-500/30 dark:bg-amber-500/10 lg:max-w-sm">
-        <CardHeader className="px-4">
-          <CardDescription className="text-xs font-medium text-amber-700 dark:text-amber-300">Currently frozen</CardDescription>
-          <CardTitle className="mt-1 text-2xl tabular-nums text-amber-700 dark:text-amber-300">{fmtUsd(heldTotal)}</CardTitle>
-          <p className="text-muted-foreground text-[11px]">{(holds ?? []).filter(h => h.status === 'held').length} affiliates on hold</p>
-        </CardHeader>
-      </Card>
+      {/* Stat cards */}
+      <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {buckets.map((item) => (
+          <Card key={item.label} className="w-full gap-0 p-6 py-4">
+            <CardContent className="p-0">
+              <dt className="text-muted-foreground text-sm font-medium">{item.label}</dt>
+              <dd className="text-foreground mt-2 text-3xl font-semibold tabular-nums">{fmtUsd(item.cents)}</dd>
+              <div className="mt-3 flex flex-col gap-2">
+                <p className="text-muted-foreground text-xs">{item.rows.length.toLocaleString()} payouts</p>
+                <Progress value={Math.min(100, (item.cents / maxBucket) * 100)} className="h-1" />
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {[
-          { label: 'Due / pending', rows: (payouts ?? []).filter((p) => ['created', 'pending', 'due'].includes(p.status)) },
-          { label: 'Processing', rows: (payouts ?? []).filter((p) => p.status === 'processing') },
-          { label: 'Paid', rows: (payouts ?? []).filter((p) => p.status === 'paid') },
-          { label: 'On fraud hold', rows: (payouts ?? []).filter((p) => p.holdStatus === 'held') },
-        ].map((item) => <Card key={item.label} className="gap-1 p-4"><CardDescription>{item.label}</CardDescription><CardTitle className="text-2xl tabular-nums">{fmtUsd(item.rows.reduce((sum, payout) => sum + payout.amountCents, 0))}</CardTitle><p className="text-muted-foreground text-xs">{item.rows.length.toLocaleString()} payouts</p></Card>)}
+      {/* Currently frozen */}
+      <div className="bg-muted border-border flex flex-col gap-3 rounded-md border p-4 lg:max-w-sm">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="bg-background border-border flex size-8 items-center justify-center rounded-md border">
+              <ShieldAlert className="size-4" />
+            </div>
+            <div>
+              <span className="text-sm">Currently frozen</span>
+              <p className="text-muted-foreground text-xs">{heldRows.length} affiliates on hold</p>
+            </div>
+          </div>
+          <div className="font-semibold tabular-nums">{fmtUsd(heldTotal)}</div>
+        </div>
+        <Progress value={Math.min(100, (heldTotal / maxBucket) * 100)} className="h-1" />
       </div>
 
       <Tabs value={view} onValueChange={(value) => setView(value as typeof view)}>
@@ -194,10 +230,12 @@ export default function PayoutReviewPage() {
           {loading && !payouts ? <div className="grid gap-2 p-4">{Array.from({ length: 5 }).map((_, index) => <Skeleton key={index} className="h-12" />)}</div> : (payouts ?? []).length === 0 ? (
             <p className="text-muted-foreground p-12 text-center text-sm">No Rewardful payouts have been synchronized yet. Run Sync Rewardful from the header.</p>
           ) : (
+            <ExpandableRows items={payouts ?? []} preview={5} perPage={10} label="payouts" render={(pageRows) => (
             <Table className="min-w-[900px]">
               <TableHeader><TableRow><TableHead className="px-5">Affiliate</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead><TableHead>Created</TableHead><TableHead>Paid</TableHead><TableHead className="px-5">Review gate</TableHead></TableRow></TableHeader>
-              <TableBody>{(payouts ?? []).map((payout) => <TableRow key={payout.id}><TableCell className="px-5"><p className="font-medium">{payout.affiliateName}</p><p className="text-muted-foreground text-xs">{payout.email}</p></TableCell><TableCell><Badge variant={payout.status === 'paid' ? 'default' : 'secondary'}>{payout.status}</Badge></TableCell><TableCell className="text-right font-semibold tabular-nums">{fmtUsd(payout.amountCents)}</TableCell><TableCell className="text-muted-foreground text-xs">{payout.createdAt ? new Date(payout.createdAt).toLocaleDateString() : '—'}</TableCell><TableCell className="text-muted-foreground text-xs">{payout.paidAt ? new Date(payout.paidAt).toLocaleDateString() : '—'}</TableCell><TableCell className="px-5">{payout.holdStatus === 'held' ? <Badge className="bg-amber-100 text-amber-700">Held · investigate</Badge> : <span className="text-muted-foreground text-xs">No local hold</span>}</TableCell></TableRow>)}</TableBody>
+              <TableBody>{pageRows.map((payout) => <TableRow key={payout.id}><TableCell className="px-5"><p className="font-medium">{payout.affiliateName}</p><p className="text-muted-foreground text-xs">{payout.email}</p></TableCell><TableCell><Badge variant="outline" className={cn('rounded-full capitalize', payoutBadgeClass(payout.status))}>{payout.status}</Badge></TableCell><TableCell className="text-right font-semibold tabular-nums">{fmtUsd(payout.amountCents)}</TableCell><TableCell className="text-muted-foreground text-xs">{payout.createdAt ? new Date(payout.createdAt).toLocaleDateString() : '—'}</TableCell><TableCell className="text-muted-foreground text-xs">{payout.paidAt ? new Date(payout.paidAt).toLocaleDateString() : '—'}</TableCell><TableCell className="px-5">{payout.holdStatus === 'held' ? <Badge variant="outline" className={cn('rounded-full', BADGE_AMBER)}>Held · investigate</Badge> : <span className="text-muted-foreground text-xs">No local hold</span>}</TableCell></TableRow>)}</TableBody>
             </Table>
+            )} />
           )}
         </Card>
       ) : <Card className="overflow-x-auto py-0">
@@ -208,6 +246,7 @@ export default function PayoutReviewPage() {
             {filter === 'held' ? 'Nothing on hold.' : 'No holds match this filter.'}
           </p>
         ) : (
+          <ExpandableRows items={rows} preview={5} perPage={10} label="holds" render={(pageRows) => (
           <Table className="min-w-[900px]">
             <TableHeader>
               <TableRow>
@@ -220,7 +259,7 @@ export default function PayoutReviewPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((h) => (
+              {pageRows.map((h) => (
                 <TableRow key={h.id}>
                   <TableCell className="px-5">
                     <p className="font-medium">{h.name ?? h.affiliateId}</p>
@@ -230,7 +269,7 @@ export default function PayoutReviewPage() {
                     {h.reason ?? '—'}
                   </TableCell>
                   <TableCell className="text-right font-semibold tabular-nums">{fmtUsd(h.amountCents)}</TableCell>
-                  <TableCell><Badge variant="secondary" className={statusBadge(h.status)}>{h.status}</Badge></TableCell>
+                  <TableCell><Badge variant="outline" className={cn('rounded-full capitalize', holdBadgeClass(h.status))}>{h.status}</Badge></TableCell>
                   <TableCell className="text-muted-foreground text-xs">
                     {h.decidedAt ? `${new Date(h.decidedAt).toLocaleDateString()} · ${h.decidedBy ?? ''}` : '—'}
                   </TableCell>
@@ -262,6 +301,7 @@ export default function PayoutReviewPage() {
               ))}
             </TableBody>
           </Table>
+          )} />
         )}
       </Card>}
     </div>

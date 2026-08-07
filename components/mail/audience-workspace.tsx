@@ -199,22 +199,25 @@ export function AudienceWorkspace({
                 return (
                   <React.Fragment key={item.id}>
                     <tr className="border-b hover:bg-muted/20">
-                      <td className="px-3 py-3 align-top">
+                      <td className="px-2 py-2">
                         <Button variant="ghost" size="icon-sm" onClick={() => setExpanded(isExpanded ? null : item.id)} aria-label={`${isExpanded ? 'Hide' : 'Show'} details for ${item.name}`} aria-expanded={isExpanded}>
                           {isExpanded ? <ChevronUp /> : <ChevronDown />}
                         </Button>
                       </td>
-                      <td className="px-3 py-3 align-top">
-                        <p className="font-medium">{item.name}</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">{item.email || 'No email address'}</p>
-                        <div className="mt-2 flex flex-wrap gap-1"><Badge variant="outline">{item.segment.replaceAll('_', ' ')}</Badge>{item.reviewStatus && item.reviewStatus !== 'unreviewed' && <Badge variant="secondary">{item.reviewStatus.replaceAll('_', ' ')}</Badge>}</div>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <p className="truncate font-medium">{item.name}</p>
+                          <Badge variant="outline" className="hidden shrink-0 xl:inline-flex">{item.segment.replaceAll('_', ' ')}</Badge>
+                          {item.reviewStatus && item.reviewStatus !== 'unreviewed' && <Badge variant="secondary" className="shrink-0">{item.reviewStatus.replaceAll('_', ' ')}</Badge>}
+                        </div>
+                        <p className="mt-0.5 truncate text-xs text-muted-foreground">{item.email || 'No email address'}</p>
                       </td>
-                      <td className="px-3 py-3 align-top"><Badge variant={state.variant}>{state.label}</Badge><p className="mt-1 max-w-64 text-xs text-muted-foreground">{state.detail}</p></td>
-                      <td className="px-3 py-3 align-top"><p className="font-medium">{formatDate(item.lastConversionAt)}</p><p className="mt-1 text-xs text-muted-foreground">{item.conversions.toLocaleString()} lifetime conversions</p></td>
-                      <td className="px-3 py-3 text-right align-top font-medium tabular-nums">{item.conversions.toLocaleString()}</td>
-                      <td className="px-3 py-3 text-right align-top tabular-nums">{money.format(item.unpaidCommissionCents / 100)}</td>
-                      <td className="px-3 py-3 text-right align-top"><Badge variant={item.riskScore >= 60 ? 'destructive' : 'secondary'}>{item.riskScore}</Badge></td>
-                      <td className="px-4 py-3 align-top"><div className="flex justify-end gap-2">
+                      <td className="px-3 py-2"><Badge variant={state.variant} title={state.detail}>{state.label}</Badge></td>
+                      <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{formatDate(item.lastConversionAt)}</td>
+                      <td className="px-3 py-2 text-right font-medium tabular-nums">{item.conversions.toLocaleString()}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{money.format(item.unpaidCommissionCents / 100)}</td>
+                      <td className="px-3 py-2 text-right"><Badge variant={item.riskScore >= 60 ? 'destructive' : 'secondary'}>{item.riskScore}</Badge></td>
+                      <td className="px-4 py-2"><div className="flex justify-end gap-2">
                         {canRetry && <Button variant="outline" size="sm" disabled={!item.email || !campaignSafe || busy === `sync-${item.id}`} onClick={() => onSyncContact(item)}><DatabaseZap /> {busy === `sync-${item.id}` ? 'Syncing…' : 'Add'}</Button>}
                         <Button variant="outline" size="sm" disabled={!item.email || busy === 'contact-inbox'} onClick={() => onOpenInbox(item)}><Inbox /> Inbox</Button>
                       </div></td>
@@ -240,12 +243,14 @@ export function AudienceWorkspace({
         </div>
 
         {audience.items.length === 0 && <EmptyAudience query={query} onClear={onClear} />}
-        <div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-muted-foreground">Showing {start.toLocaleString()}–{end.toLocaleString()} of {audience.page.total.toLocaleString()}</p>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="icon-sm" disabled={page <= 1} onClick={onPreviousPage} aria-label="Previous audience page"><ArrowLeft /></Button>
-            <span className="text-xs tabular-nums">Page {page} / {totalPages}</span>
-            <Button variant="outline" size="icon-sm" disabled={page >= totalPages} onClick={onNextPage} aria-label="Next audience page"><ArrowRight /></Button>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-4 py-2.5">
+          <p className="text-xs text-muted-foreground">
+            Showing <span className="font-medium text-foreground tabular-nums">{start.toLocaleString()}–{end.toLocaleString()}</span> of <span className="font-medium text-foreground tabular-nums">{audience.page.total.toLocaleString()}</span>
+          </p>
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="sm" disabled={page <= 1} onClick={onPreviousPage} aria-label="Previous audience page"><ArrowLeft /> Prev</Button>
+            <span className="min-w-16 text-center text-xs tabular-nums text-muted-foreground">Page {page} of {totalPages}</span>
+            <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={onNextPage} aria-label="Next audience page">Next <ArrowRight /></Button>
           </div>
         </div>
       </CardContent>

@@ -99,6 +99,10 @@ async function migrate() {
   await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS risk_updated_at TIMESTAMPTZ`;
   await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS fraud_tags JSONB DEFAULT '[]'::jsonb`;
 
+  // Multi-source support: 'rewardful' (default) or 'dub'
+  await sql`ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'rewardful'`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_affiliates_source ON affiliates (source)`;
+
   await sql`CREATE INDEX IF NOT EXISTS idx_referrals_affiliate_id ON referrals (affiliate_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_referrals_created_at ON referrals (created_at)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_affiliates_review_status ON affiliates (review_status)`;
@@ -258,6 +262,16 @@ async function migrate() {
   await sql`CREATE INDEX IF NOT EXISTS idx_outreach_events_campaign ON outreach_events (campaign_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_outreach_events_created_at ON outreach_events (created_at)`;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS mail_drafts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL UNIQUE,
+      steps JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
   // ---- Data repair: commissions.affiliate_id is NULL on legacy rows; sales has it ----
   await sql`
     UPDATE commissions c SET affiliate_id = s.affiliate_id
@@ -265,6 +279,26 @@ async function migrate() {
     WHERE c.sale_id = s.rewardful_id AND c.affiliate_id IS NULL AND s.affiliate_id IS NOT NULL
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_commissions_affiliate_id ON commissions (affiliate_id)`;
+
+  // Dashboard query performance
+  await sql`CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales (created_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_sales_affiliate_id ON sales (affiliate_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_commissions_created_at ON commissions (created_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_referrals_status ON referrals (status)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_referrals_converted_at ON referrals (converted_at)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_referrals_link_token ON referrals (link_token)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_webhook_events_received_at ON webhook_events (received_at DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_referrals_affiliate_token ON referrals (affiliate_id, link_token)`;
+
+  // Durable cache for expensive PostHog computations (TTS funnel analysis) —
+  // serverless in-memory caches die between invocations; this survives.
+  await sql`
+    CREATE TABLE IF NOT EXISTS api_cache (
+      key TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
 
   console.log('✅ All tables created successfully.');
 }

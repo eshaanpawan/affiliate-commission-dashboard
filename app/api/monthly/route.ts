@@ -20,48 +20,70 @@ export async function GET(req: NextRequest) {
 
   const requestedRange = req.nextUrl.searchParams.get('period');
   const range = isDashboardRange(requestedRange) ? requestedRange : 'all';
-  const cutoff = dashboardRangeStart(range);
+
+  // Explicit ISO bounds override the rolling-period cutoff.
+  // `from` is inclusive, `to` is exclusive; both filter created_at.
+  const parseIso = (value: string | null): string | null => {
+    if (!value) return null;
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  };
+  const fromParam = parseIso(req.nextUrl.searchParams.get('from'));
+  const toParam = parseIso(req.nextUrl.searchParams.get('to'));
+  const hasExplicitBounds = fromParam !== null || toParam !== null;
+
+  const cutoff = hasExplicitBounds ? fromParam : dashboardRangeStart(range);
+  const upper = hasExplicitBounds ? toParam : null;
+
+  // Bucket granularity: month rollups by default; day for single-month reports.
+  const bucket = req.nextUrl.searchParams.get('bucket') === 'day' ? 'day' : 'month';
+  const fmt = bucket === 'day' ? 'YYYY-MM-DD' : 'YYYY-MM';
 
   try {
     const rows = await sql`
       WITH visitors AS (
-        SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS month,
+        SELECT to_char(date_trunc(${bucket}, created_at), ${fmt}) AS month,
                COUNT(*)::int AS visitors
         FROM referrals
         WHERE status <> 'deleted'
           AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
+          AND (${upper}::timestamptz IS NULL OR created_at < ${upper}::timestamptz)
         GROUP BY 1
       ),
       leads AS (
-        SELECT to_char(date_trunc('month', COALESCE(became_lead_at, created_at)), 'YYYY-MM') AS month,
+        SELECT to_char(date_trunc(${bucket}, COALESCE(became_lead_at, created_at)), ${fmt}) AS month,
                COUNT(*)::int AS leads
         FROM referrals
         WHERE status IN ('lead', 'converted')
           AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
+          AND (${upper}::timestamptz IS NULL OR created_at < ${upper}::timestamptz)
         GROUP BY 1
       ),
       conversions AS (
-        SELECT to_char(date_trunc('month', COALESCE(converted_at, created_at)), 'YYYY-MM') AS month,
+        SELECT to_char(date_trunc(${bucket}, COALESCE(converted_at, created_at)), ${fmt}) AS month,
                COUNT(*)::int AS conversions
         FROM referrals
         WHERE status = 'converted'
           AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
+          AND (${upper}::timestamptz IS NULL OR created_at < ${upper}::timestamptz)
         GROUP BY 1
       ),
       sales AS (
-        SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS month,
+        SELECT to_char(date_trunc(${bucket}, created_at), ${fmt}) AS month,
                COALESCE(SUM(amount_cents), 0)::bigint AS sales_cents
         FROM sales
         WHERE status = 'created'
           AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
+          AND (${upper}::timestamptz IS NULL OR created_at < ${upper}::timestamptz)
         GROUP BY 1
       ),
       comms AS (
-        SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS month,
+        SELECT to_char(date_trunc(${bucket}, created_at), ${fmt}) AS month,
                COALESCE(SUM(amount_cents), 0)::bigint AS commissions_cents
         FROM commissions
         WHERE status NOT IN ('voided', 'deleted')
           AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
+          AND (${upper}::timestamptz IS NULL OR created_at < ${upper}::timestamptz)
         GROUP BY 1
       )
       SELECT
@@ -112,7 +134,7 @@ export async function GET(req: NextRequest) {
       { visitors: 0, leads: 0, conversions: 0, salesCents: 0, commissionsCents: 0, netCents: 0 },
     );
 
-    return NextResponse.json({ months, totals, meta: { range, from: cutoff, generatedAt: new Date().toISOString() } });
+    return NextResponse.json({ months, totals, meta: { range, from: cutoff, to: upper, bucket, generatedAt: new Date().toISOString() } });
   } catch (err) {
     console.error('GET /api/monthly failed:', err);
     return NextResponse.json({ error: 'Failed to load monthly summary' }, { status: 500 });

@@ -106,7 +106,7 @@ function toCandidate(row: AffiliateRow, posthogRiskScore: number): OutreachCandi
     email,
     first_name: firstName,
     last_name: lastName,
-    company_name: 'Runable Affiliate',
+    company_name: 'Runable',
     custom_variables: customVariables,
   };
   const payloadHash = createHash('sha256').update(JSON.stringify(lead)).digest('hex');
@@ -141,6 +141,7 @@ async function affiliateRows(affiliateId?: string): Promise<AffiliateRow[]> {
            review_status, risk_score, fraud_tags, enforcement_state
     FROM affiliates
     WHERE COALESCE(status, 'active') <> 'deleted'
+      AND COALESCE(source, 'rewardful') = 'rewardful'
     ORDER BY created_at ASC NULLS LAST, rewardful_id ASC
   `;
   return rows as unknown as AffiliateRow[];

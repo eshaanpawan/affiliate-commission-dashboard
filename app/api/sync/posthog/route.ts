@@ -10,7 +10,7 @@
 import { NextResponse } from 'next/server';
 import { sql as dsql } from 'drizzle-orm';
 import { isAuthed } from '@/lib/auth';
-import { runHogQL } from '@/lib/posthog';
+import { getConversionCountriesByEmail, runHogQL } from '@/lib/posthog';
 import { db, affiliateTraffic } from '@/lib/db/index';
 import { queueAffiliateOutreachContacts } from '@/lib/outreach';
 
@@ -246,12 +246,36 @@ export async function POST(req: Request) {
   // Draft/Paused campaign and never activates or sends.
   const outreachQueue = await queueAffiliateOutreachContacts();
 
+  // Geo enrichment: fill country on recently converted referrals from PostHog.
+  let countriesEnriched = 0;
+  try {
+    const countryMap = await getConversionCountriesByEmail();
+    if (countryMap.size > 0) {
+      const missing = await db.execute(dsql`
+        SELECT rewardful_id, customer_email FROM referrals
+        WHERE status = 'converted' AND country_code IS NULL AND customer_email IS NOT NULL
+      `);
+      for (const row of missing.rows as { rewardful_id: string; customer_email: string }[]) {
+        const country = countryMap.get(row.customer_email.toLowerCase());
+        if (!country) continue;
+        await db.execute(dsql`
+          UPDATE referrals SET country_code = ${country.country_code}, country_name = ${country.country_name}
+          WHERE rewardful_id = ${row.rewardful_id}
+        `);
+        countriesEnriched++;
+      }
+    }
+  } catch (err) {
+    console.error('Country enrichment failed (next run retries):', err);
+  }
+
   return NextResponse.json({
     ok: true,
     days,
     tokens,
     rowsUpserted,
     oursCampaignCount: oursIds.size,
+    countriesEnriched,
     outreachQueue,
     tookMs: Date.now() - t0,
   });

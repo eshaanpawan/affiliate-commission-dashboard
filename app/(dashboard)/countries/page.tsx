@@ -16,10 +16,12 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
+import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { PageControls } from '@/components/PageControls';
 
 const COUNTRY_CHART_CONFIG = {
   conversions: { label: 'Conversions', color: 'var(--chart-1)' },
@@ -28,6 +30,31 @@ const COUNTRY_CHART_CONFIG = {
 const GEO_TOOLTIP_TEXT = "Country is PostHog-enriched attribution stored against the Rewardful conversion. The conversion customer is matched to a PostHog user and the country comes from that user's first client-side pageview geo. Unmatched conversions remain unattributed instead of being guessed.";
 
 const PER_PAGE = 15;
+
+function flagEmoji(code: string): string {
+  if (!/^[A-Z]{2}$/i.test(code)) return '🌐';
+  return String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1a5 + c.charCodeAt(0)));
+}
+
+function CountryShareList({ countries }: {
+  countries: { country_code: string; country_name: string; conversions: number }[];
+}) {
+  const total = countries.reduce((s, c) => s + c.conversions, 0);
+  return (
+    <div className="space-y-5">
+      {countries.map((c) => (
+        <div key={c.country_code} className="flex items-center">
+          <span className="text-2xl">{flagEmoji(c.country_code)}</span>
+          <div className="ml-4 min-w-0 flex-1 space-y-1">
+            <p className="text-sm leading-none font-medium">{c.country_name}</p>
+            <Progress value={total ? (c.conversions / total) * 100 : 0} className="h-1" />
+          </div>
+          <div className="ms-auto pl-4 font-medium tabular-nums">{c.conversions.toLocaleString()}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function InfoTooltip({ text }: { text: string }) {
   return (
@@ -53,10 +80,10 @@ function CountryOverviewCard() {
   const rows = data?.countriesByConversions ?? [];
 
   return (
-    <Card className="mb-8 gap-0 overflow-hidden py-0">
+    <Card className="gap-0 overflow-hidden rounded-xl py-0">
       <CardHeader className="[.border-b]:pb-0 gap-1 border-b py-4">
-        <CardTitle className="flex items-center text-sm">Conversions by Country<InfoTooltip text={GEO_TOOLTIP_TEXT} /></CardTitle>
-        <CardDescription className="text-xs">Top conversion markets in this chart&apos;s reporting window</CardDescription>
+        <CardTitle className="flex items-center">Conversions by country<InfoTooltip text={GEO_TOOLTIP_TEXT} /></CardTitle>
+        <CardDescription className="text-muted-foreground text-sm">Top conversion markets in this chart&apos;s reporting window</CardDescription>
         <CardAction className="flex flex-wrap items-center justify-end gap-2">
           <ChartRangeTabs value={rangeOverride} globalRange={globalRange} onChange={setRangeOverride} />
           <Tabs value={view} onValueChange={(value) => setView(value as 'chart' | 'table')}>
@@ -78,10 +105,7 @@ function CountryOverviewCard() {
             </BarChart>
           </ChartContainer>
         ) : (
-          <Table>
-            <TableHeader><TableRow><TableHead>Country</TableHead><TableHead className="text-right">Conversions</TableHead></TableRow></TableHeader>
-            <TableBody>{rows.map((row) => <TableRow key={row.country_code}><TableCell>{row.country_name}</TableCell><TableCell className="text-right font-semibold tabular-nums">{row.conversions}</TableCell></TableRow>)}</TableBody>
-          </Table>
+          <CountryShareList countries={rows} />
         )}
       </CardContent>
     </Card>
@@ -117,10 +141,9 @@ function AffiliateCountryBreakdown({ affiliateId }: { affiliateId: string }) {
           </BarChart>
         </ChartContainer>
       ) : (
-        <Table className="mt-4">
-          <TableHeader><TableRow><TableHead>Country</TableHead><TableHead className="text-right">Conversions</TableHead></TableRow></TableHeader>
-          <TableBody>{countries.map((country) => <TableRow key={country.country_code}><TableCell>{country.country_name}</TableCell><TableCell className="text-right font-semibold tabular-nums">{country.conversions}</TableCell></TableRow>)}</TableBody>
-        </Table>
+        <div className="mt-4">
+          <CountryShareList countries={countries} />
+        </div>
       )}
     </div>
   );
@@ -135,12 +158,10 @@ export default function CountriesPage() {
 
   if (loading && !data) {
     return (
-      <div className="mx-auto w-full max-w-[112rem] px-4 py-8">
-        <Skeleton className="mb-8 h-10 w-72" />
-        <div className="flex flex-col gap-8">
-          <Skeleton className="h-96 w-full" />
-          <Skeleton className="h-96 w-full" />
-        </div>
+      <div className="@container/main mx-auto w-full max-w-[112rem] space-y-4 px-4 py-6 md:px-6">
+        <Skeleton className="h-10 w-72" />
+        <Skeleton className="h-96 w-full" />
+        <Skeleton className="h-96 w-full" />
       </div>
     );
   }
@@ -156,13 +177,14 @@ export default function CountriesPage() {
   const paged = paginate(data.affiliateCountries, page, PER_PAGE);
 
   return (
-    <div className="mx-auto w-full max-w-[112rem] px-4 py-8">
+    <div className="@container/main mx-auto w-full max-w-[112rem] space-y-4 px-4 py-6 md:px-6">
       {/* Header */}
-      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+      <div className="flex flex-row flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Countries</h1>
-          <p className="text-muted-foreground mt-1 text-sm">Conversion geography — overall and per affiliate</p>
+          <h1 className="text-xl font-bold tracking-tight lg:text-2xl">Countries</h1>
+          <p className="text-muted-foreground mt-0.5 text-sm">Conversion geography — overall and per affiliate</p>
         </div>
+        <PageControls />
       </div>
 
       <CountryOverviewCard />
@@ -170,12 +192,12 @@ export default function CountriesPage() {
       {/* Affiliate x Country breakdown */}
       {data.affiliateCountries.length > 0 && (
         <SectionCard
-          className="mb-8"
           title={<>Conversions by Affiliate &amp; Country<InfoTooltip text={GEO_TOOLTIP_TEXT} /></>}
           description="Click an affiliate row to expand their country breakdown"
           open={affiliateCountriesExpanded}
           onOpenChange={setAffiliateCountriesExpanded}
         >
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -218,6 +240,7 @@ export default function CountriesPage() {
               })}
             </TableBody>
           </Table>
+          </div>
           <Pager
             page={paged.page}
             totalPages={paged.totalPages}

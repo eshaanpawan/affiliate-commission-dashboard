@@ -22,6 +22,12 @@ POSTHOG_API_KEY=phx_...          # PostHog personal API key (read-only)
 POSTHOG_PROJECT_ID=153418        # PostHog project ID (Runable)
 ```
 
+Dub (second affiliate source — partners synced into `affiliates` with `source = 'dub'`):
+```
+DUB_API_KEY=dub_...           # Dub Partners API token
+DUB_WEBHOOK_SECRET=...        # signing secret shown after creating the webhook in Dub
+```
+
 Optional (only needed for webhooks and cron):
 ```
 REWARDFUL_WEBHOOK_SECRET=...
@@ -53,6 +59,7 @@ app/
     sync/route.ts                 # POST — pull latest data from Rewardful into DB
     affiliates/[id]/route.ts      # GET — per-affiliate detail data
     webhooks/rewardful/route.ts   # POST — receive Rewardful webhook events
+    webhooks/dub/route.ts         # POST — receive Dub webhook events (Dub-Signature HMAC)
     cron/sync/route.ts            # GET — cron-triggered sync (requires CRON_SECRET)
 scripts/
   migrate.ts                      # DB schema creation (idempotent)

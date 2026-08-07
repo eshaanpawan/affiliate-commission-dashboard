@@ -3,6 +3,7 @@ import { neon } from '@neondatabase/serverless';
 import { extractTrafficFields } from '@/lib/fraud-detection';
 import { isAuthed } from '@/lib/auth';
 import { queueAffiliateOutreachContacts } from '@/lib/outreach';
+import { syncDub } from '@/lib/dub';
 
 const sql = neon(process.env.NEON_DATABASE_URL!);
 const API_SECRET = process.env.REWARDFUL_API_SECRET!;
@@ -214,7 +215,8 @@ export async function POST(req: Request) {
       await sql`
         UPDATE affiliates
         SET status = 'deleted', updated_at = NOW()
-        WHERE status <> 'deleted' AND NOT (rewardful_id = ANY(${sourceIds}::text[]))
+        WHERE status <> 'deleted' AND source = 'rewardful'
+          AND NOT (rewardful_id = ANY(${sourceIds}::text[]))
       `;
     }
 
@@ -369,6 +371,17 @@ export async function POST(req: Request) {
       }
     }
 
+    // Dub partners are a second source; a Dub outage must not fail the Rewardful sync
+    let dub: { partners: number; customers: number; commissions: number } | { error: string } = { partners: 0, customers: 0, commissions: 0 };
+    if (process.env.DUB_API_KEY) {
+      try {
+        dub = await syncDub();
+      } catch (err) {
+        console.error('Dub sync error:', err);
+        dub = { error: err instanceof Error ? err.message : 'Dub sync failed' };
+      }
+    }
+
     const outreachQueue = await queueAffiliateOutreachContacts();
 
     return NextResponse.json({
@@ -380,6 +393,7 @@ export async function POST(req: Request) {
         commissions: commissions.length,
         payouts: payouts.length,
         commissionStatsUpdated: affiliates.filter((affiliate) => affiliate.commission_stats).length,
+        dub,
       },
       syncedAt: new Date().toISOString(),
       outreachQueue,

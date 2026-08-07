@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Eye,
   EyeOff,
+  Library,
   LoaderCircle,
   Plus,
   Save,
@@ -35,6 +36,22 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -47,6 +64,8 @@ type SequencePayload = {
   campaign: { id: string; name: string | null; status: number | null; updatedAt: string | null };
   steps: Step[];
 };
+
+type SavedDraft = { id: string; name: string; steps: Step[]; updatedAt: string };
 
 const EMPTY_VARIANT: Variant = { subject: '', body: '', disabled: false };
 const MERGE_TAGS = ['{{firstName}}', '{{lastName}}', '{{companyName}}'];
@@ -70,11 +89,14 @@ function campaignLabel(status: number | null) {
   return 'Unknown';
 }
 
+// firstName/lastName vary per recipient (Rewardful profile name) — Avery Patel is a
+// stand-in. companyName is NOT per-recipient: the sync hardcodes it, so preview the
+// exact string every email will contain.
 function previewCopy(value: string) {
   return value
     .replaceAll('{{firstName}}', 'Avery')
     .replaceAll('{{lastName}}', 'Patel')
-    .replaceAll('{{companyName}}', 'Northstar Media');
+    .replaceAll('{{companyName}}', 'Runable');
 }
 
 function delayLabel(delay: number, unit: DelayUnit) {
@@ -91,7 +113,33 @@ export function SequenceDraftEditor({ onSaved }: { onSaved: () => Promise<void> 
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [stepsExpanded, setStepsExpanded] = React.useState(true);
   const [previewVisible, setPreviewVisible] = React.useState(true);
+  // null = default 50/50 split; a number = px width set by dragging.
+  const [previewWidth, setPreviewWidth] = React.useState<number | null>(null);
+  const [library, setLibrary] = React.useState<SavedDraft[]>([]);
+  const [saveAsOpen, setSaveAsOpen] = React.useState(false);
+  const [draftName, setDraftName] = React.useState('');
+  const [libraryBusy, setLibraryBusy] = React.useState(false);
   const bodyRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const previewRef = React.useRef<HTMLElement | null>(null);
+
+  function startPreviewResize(event: React.PointerEvent) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = previewWidth ?? previewRef.current?.offsetWidth ?? 360;
+    const onMove = (move: PointerEvent) => {
+      setPreviewWidth(Math.min(640, Math.max(280, startWidth + (startX - move.clientX))));
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.removeProperty('cursor');
+      document.body.style.removeProperty('user-select');
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -109,7 +157,63 @@ export function SequenceDraftEditor({ onSaved }: { onSaved: () => Promise<void> 
     }
   }, []);
 
-  React.useEffect(() => { void load(); }, [load]);
+  const loadLibrary = React.useCallback(async () => {
+    try {
+      const response = await fetch('/api/mail/drafts', { cache: 'no-store' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error ?? `Request failed (${response.status})`);
+      setLibrary(Array.isArray(payload.drafts) ? payload.drafts : []);
+    } catch {
+      // The library is optional UI; the editor still works without it.
+    }
+  }, []);
+
+  React.useEffect(() => { void load(); void loadLibrary(); }, [load, loadLibrary]);
+
+  function loadDraftFromLibrary(draft: SavedDraft) {
+    setSteps(cloneSteps(draft.steps));
+    setSelectedStep(0);
+    setSelectedVariant(0);
+    toast.success(`“${draft.name}” loaded into the editor. Review it, then press Save draft to write it to the campaign.`);
+  }
+
+  async function saveToLibrary() {
+    const name = draftName.trim();
+    if (!name) return;
+    setLibraryBusy(true);
+    try {
+      const response = await fetch('/api/mail/drafts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true, name, steps }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error ?? `Request failed (${response.status})`);
+      toast.success(`Saved “${name}” to the draft library.`);
+      setSaveAsOpen(false);
+      setDraftName('');
+      await loadLibrary();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not save to the library.');
+    } finally {
+      setLibraryBusy(false);
+    }
+  }
+
+  async function deleteFromLibrary(draft: SavedDraft) {
+    setLibraryBusy(true);
+    try {
+      const response = await fetch(`/api/mail/drafts?id=${encodeURIComponent(draft.id)}`, { method: 'DELETE' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error ?? `Request failed (${response.status})`);
+      toast.success(`Deleted “${draft.name}” from the library.`);
+      await loadLibrary();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not delete this draft.');
+    } finally {
+      setLibraryBusy(false);
+    }
+  }
 
   const serialized = JSON.stringify(steps);
   const savedSerialized = JSON.stringify(source?.steps.length ? source.steps : [{ type: 'email', delay: 1, delayUnit: 'days', variants: [{ ...EMPTY_VARIANT }] }]);
@@ -235,6 +339,29 @@ export function SequenceDraftEditor({ onSaved }: { onSaved: () => Promise<void> 
               <CardDescription className="mt-1">{steps.length} step{steps.length === 1 ? '' : 's'} · {variantCount} variant{variantCount === 1 ? '' : 's'}</CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" disabled={libraryBusy}><Library /> Library{library.length > 0 && <Badge variant="secondary">{library.length}</Badge>}</Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-72">
+                  <DropdownMenuLabel>Saved drafts</DropdownMenuLabel>
+                  {library.length === 0 && <DropdownMenuItem disabled>No saved drafts yet</DropdownMenuItem>}
+                  {library.map((draft) => (
+                    <DropdownMenuItem key={draft.id} onSelect={() => loadDraftFromLibrary(draft)}>
+                      <span className="min-w-0 flex-1 truncate">{draft.name}</span>
+                      <span className="text-muted-foreground ml-2 shrink-0 text-[10px]">{draft.steps.length} step{draft.steps.length === 1 ? '' : 's'}</span>
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-destructive ml-1 shrink-0"
+                        aria-label={`Delete draft ${draft.name}`}
+                        onClick={(event) => { event.stopPropagation(); event.preventDefault(); void deleteFromLibrary(draft); }}
+                      ><Trash2 className="size-3.5" /></button>
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => { setDraftName(''); setSaveAsOpen(true); }}><Save /> Save current as…</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button variant="ghost" size="sm" onClick={() => setStepsExpanded((value) => !value)}>{stepsExpanded ? <ChevronUp /> : <ChevronDown />} {stepsExpanded ? 'Collapse steps' : 'Show steps'}</Button>
               <Button variant="outline" size="sm" onClick={() => setPreviewVisible((value) => !value)}>{previewVisible ? <EyeOff /> : <Eye />} {previewVisible ? 'Hide preview' : 'Show preview'}</Button>
               <Button variant="outline" size="sm" onClick={() => void load()} disabled={saving || !dirty}>Reset</Button>
@@ -258,14 +385,22 @@ export function SequenceDraftEditor({ onSaved }: { onSaved: () => Promise<void> 
         )}
 
         <CardContent className="min-h-0 flex-1 p-0 lg:overflow-hidden">
-          <div className={`${previewVisible ? 'grid lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]' : 'block'} min-h-0 lg:h-full`}>
+          <div
+            className={`${previewVisible ? 'grid lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,var(--preview-w))]' : 'block'} min-h-0 lg:h-full`}
+            style={previewVisible ? ({ '--preview-w': previewWidth ? `${previewWidth}px` : '50%' } as React.CSSProperties) : undefined}
+          >
             <section className="min-w-0 p-4 md:p-5 lg:flex lg:min-h-0 lg:flex-col lg:overflow-hidden">
-              <div className="shrink-0 flex flex-col gap-3 border-b pb-4 xl:flex-row xl:items-end">
-                <div className="min-w-48"><p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Step {selectedStep + 1} of {steps.length}</p><h3 className="mt-1 font-semibold">{selectedStep === 0 ? 'Opening email' : `Follow-up ${selectedStep}`}</h3></div>
-                <div className="flex flex-1 flex-wrap items-end gap-2">
-                  <div className="w-24"><label className="mb-1 block text-[11px] text-muted-foreground">Wait</label><Input type="number" min={0} max={90} value={activeStep.delay} onChange={(event) => updateStep(selectedStep, { delay: Math.max(0, Math.min(90, Number.parseInt(event.target.value || '0', 10))) })} /></div>
-                  <div className="w-32"><label className="mb-1 block text-[11px] text-muted-foreground">Unit</label><Select value={activeStep.delayUnit} onValueChange={(value: DelayUnit) => updateStep(selectedStep, { delayUnit: value })}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="minutes">Minutes</SelectItem><SelectItem value="hours">Hours</SelectItem><SelectItem value="days">Days</SelectItem></SelectContent></Select></div>
-                  <div className="ml-auto flex items-center gap-1"><Button size="icon-sm" variant="ghost" onClick={() => moveStep(selectedStep, -1)} disabled={selectedStep === 0} aria-label="Move step earlier"><ArrowUp /></Button><Button size="icon-sm" variant="ghost" onClick={() => moveStep(selectedStep, 1)} disabled={selectedStep === steps.length - 1} aria-label="Move step later"><ArrowDown /></Button><Button size="icon-sm" variant="ghost" onClick={() => removeStep(selectedStep)} disabled={steps.length === 1} aria-label="Remove step"><Trash2 /></Button></div>
+              <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b pb-3">
+                <h3 className="font-semibold">{selectedStep === 0 ? 'Opening email' : `Follow-up ${selectedStep}`}</h3>
+                <span className="text-muted-foreground text-xs">Step {selectedStep + 1} of {steps.length}</span>
+                <div className="ml-auto flex items-center gap-2">
+                  <label htmlFor="step-wait" className="text-muted-foreground text-xs">Wait</label>
+                  <Input id="step-wait" type="number" min={0} max={90} className="w-18" value={activeStep.delay} onChange={(event) => updateStep(selectedStep, { delay: Math.max(0, Math.min(90, Number.parseInt(event.target.value || '0', 10))) })} />
+                  <Select value={activeStep.delayUnit} onValueChange={(value: DelayUnit) => updateStep(selectedStep, { delayUnit: value })}><SelectTrigger className="w-28" aria-label="Wait unit"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="minutes">Minutes</SelectItem><SelectItem value="hours">Hours</SelectItem><SelectItem value="days">Days</SelectItem></SelectContent></Select>
+                  <span className="mx-1 h-5 w-px bg-border" />
+                  <Button size="icon-sm" variant="ghost" onClick={() => moveStep(selectedStep, -1)} disabled={selectedStep === 0} aria-label="Move step earlier"><ArrowUp /></Button>
+                  <Button size="icon-sm" variant="ghost" onClick={() => moveStep(selectedStep, 1)} disabled={selectedStep === steps.length - 1} aria-label="Move step later"><ArrowDown /></Button>
+                  <Button size="icon-sm" variant="ghost" onClick={() => removeStep(selectedStep)} disabled={steps.length === 1} aria-label="Remove step"><Trash2 /></Button>
                 </div>
               </div>
 
@@ -278,7 +413,20 @@ export function SequenceDraftEditor({ onSaved }: { onSaved: () => Promise<void> 
             </section>
 
             {previewVisible && (
-              <aside className="border-t bg-muted/10 p-4 lg:min-h-0 lg:overflow-y-auto lg:border-l lg:border-t-0">
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize preview panel"
+                title="Drag to resize · double-click to reset"
+                onPointerDown={startPreviewResize}
+                onDoubleClick={() => setPreviewWidth(null)}
+                className="group hidden w-2 shrink-0 cursor-col-resize touch-none items-center justify-center border-l bg-transparent transition-colors hover:bg-muted/70 active:bg-muted lg:flex"
+              >
+                <span className="h-8 w-0.5 rounded-full bg-border transition-colors group-hover:bg-foreground/40" />
+              </div>
+            )}
+            {previewVisible && (
+              <aside ref={previewRef} className="border-t bg-muted/10 p-4 lg:min-h-0 lg:overflow-y-auto lg:border-t-0">
                 <div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2"><Eye className="size-4" /><p className="text-sm font-semibold">Preview</p></div><Button size="icon-sm" variant="ghost" onClick={() => setPreviewVisible(false)} aria-label="Hide preview"><X /></Button></div>
                 <div className="overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-950 shadow-sm dark:border-slate-800 dark:bg-slate-950 dark:text-slate-50">
                   <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-800 dark:bg-slate-900"><p className="text-[10px] uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">Subject</p><p className="mt-1 break-words text-sm font-semibold">{previewCopy(activeVariant.subject) || 'Subject preview'}</p></div>
@@ -290,6 +438,27 @@ export function SequenceDraftEditor({ onSaved }: { onSaved: () => Promise<void> 
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={saveAsOpen} onOpenChange={setSaveAsOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save to draft library</DialogTitle>
+            <DialogDescription>Stores the current {steps.length}-step sequence in your database. Saving with an existing name overwrites that draft. This does not change the campaign.</DialogDescription>
+          </DialogHeader>
+          <Input
+            value={draftName}
+            onChange={(event) => setDraftName(event.target.value)}
+            placeholder="e.g. Dormant re-activation"
+            maxLength={120}
+            onKeyDown={(event) => { if (event.key === 'Enter' && draftName.trim()) void saveToLibrary(); }}
+            aria-label="Draft name"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSaveAsOpen(false)} disabled={libraryBusy}>Cancel</Button>
+            <Button onClick={() => void saveToLibrary()} disabled={libraryBusy || !draftName.trim()}>{libraryBusy ? <LoaderCircle className="animate-spin" /> : <Save />} Save draft</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>

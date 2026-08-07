@@ -32,6 +32,8 @@ export async function GET(req: NextRequest) {
     monthlyCommissions,
     countriesByConversions,
     affiliateCountryRows,
+    adRunnerStats,
+    signupStats,
     freshness,
   ] = await Promise.all([
     sql`
@@ -48,8 +50,23 @@ export async function GET(req: NextRequest) {
           WHERE status <> 'deleted'
             AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
         ) AS new_in_window,
+        COUNT(*) FILTER (
+          WHERE status <> 'deleted' AND created_at >= CURRENT_DATE
+        ) AS onboarded_today,
+        COUNT(*) FILTER (
+          WHERE status <> 'deleted' AND (
+            status = 'suspicious'
+            OR review_status IN ('flagged', 'paused')
+            OR COALESCE(risk_score, 0) >= 60
+          )
+        ) AS fraud_affiliates,
         COALESCE(SUM(visitors) FILTER (WHERE status <> 'deleted'), 0) AS source_referrals,
-        COALESCE(SUM(conversions) FILTER (WHERE status <> 'deleted'), 0) AS source_conversions
+        COALESCE(SUM(
+          CASE WHEN COALESCE(source, 'rewardful') = 'dub' THEN leads
+               ELSE leads + conversions END
+        ) FILTER (WHERE status <> 'deleted'), 0) AS source_signups,
+        COALESCE(SUM(conversions) FILTER (WHERE status <> 'deleted'), 0) AS source_conversions,
+        COUNT(*) FILTER (WHERE status <> 'deleted' AND source = 'dub') AS dub_affiliates
       FROM affiliates
     `,
     sql`
@@ -150,6 +167,18 @@ export async function GET(req: NextRequest) {
         WHERE status = 'created'
           AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
         GROUP BY affiliate_id
+      ), token_counts AS (
+        SELECT affiliate_id, link_token, COUNT(*) AS count
+        FROM referrals
+        WHERE link_token IS NOT NULL AND affiliate_id IS NOT NULL
+        GROUP BY affiliate_id, link_token
+      ), links_agg AS (
+        SELECT
+          affiliate_id,
+          (ARRAY_AGG(link_token ORDER BY count DESC))[1] AS primary_link_token,
+          JSONB_AGG(JSONB_BUILD_OBJECT('token', link_token, 'count', count) ORDER BY count DESC) AS link_tokens
+        FROM token_counts
+        GROUP BY affiliate_id
       ), commission_rollup AS (
         SELECT affiliate_id, SUM(amount_cents) AS commission_cents
         FROM commissions
@@ -159,6 +188,7 @@ export async function GET(req: NextRequest) {
       )
       SELECT
         a.rewardful_id, a.first_name, a.last_name, a.email, a.status, a.created_at,
+        COALESCE(a.source, 'rewardful') AS source,
         a.visitors AS source_visitors, a.leads AS source_leads, a.conversions AS source_conversions,
         COALESCE(r.referrals, 0) AS referrals,
         COALESCE(r.signups, 0) AS signups,
@@ -179,17 +209,7 @@ export async function GET(req: NextRequest) {
       LEFT JOIN revenue_rollup s ON s.affiliate_id = a.rewardful_id
       LEFT JOIN commission_rollup c ON c.affiliate_id = a.rewardful_id
       LEFT JOIN posthog p ON p.affiliate_id = a.rewardful_id
-      LEFT JOIN LATERAL (
-        SELECT
-          (ARRAY_AGG(link_token ORDER BY count DESC))[1] AS primary_link_token,
-          JSONB_AGG(JSONB_BUILD_OBJECT('token', link_token, 'count', count) ORDER BY count DESC) AS link_tokens
-        FROM (
-          SELECT link_token, COUNT(*) AS count
-          FROM referrals
-          WHERE affiliate_id = a.rewardful_id AND link_token IS NOT NULL
-          GROUP BY link_token
-        ) token_counts
-      ) links ON true
+      LEFT JOIN links_agg links ON links.affiliate_id = a.rewardful_id
       WHERE a.status <> 'deleted'
       ORDER BY COALESCE(r.conversions, 0) DESC, COALESCE(r.referrals, 0) DESC, a.created_at DESC
     `,
@@ -298,7 +318,7 @@ export async function GET(req: NextRequest) {
       SELECT country_name, country_code, COUNT(*) AS conversions
       FROM referrals
       WHERE status = 'converted' AND country_code IS NOT NULL
-        AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
+        AND (${cutoff}::timestamptz IS NULL OR COALESCE(converted_at, created_at) >= ${cutoff}::timestamptz)
       GROUP BY country_name, country_code
       ORDER BY conversions DESC
       LIMIT 20
@@ -310,9 +330,28 @@ export async function GET(req: NextRequest) {
       FROM referrals r
       JOIN affiliates a ON a.rewardful_id = r.affiliate_id
       WHERE r.status = 'converted' AND r.country_code IS NOT NULL
-        AND (${cutoff}::timestamptz IS NULL OR r.created_at >= ${cutoff}::timestamptz)
+        AND (${cutoff}::timestamptz IS NULL OR COALESCE(r.converted_at, r.created_at) >= ${cutoff}::timestamptz)
       GROUP BY a.rewardful_id, a.first_name, a.last_name, a.email, r.country_code, r.country_name
       ORDER BY a.email, conversions DESC
+    `,
+    sql`
+      SELECT COUNT(DISTINCT token_owner.affiliate_id) AS ad_running_affiliates
+      FROM affiliate_traffic t
+      JOIN (
+        SELECT DISTINCT ON (link_token) link_token, affiliate_id
+        FROM referrals
+        WHERE link_token IS NOT NULL AND affiliate_id IS NOT NULL
+        ORDER BY link_token, created_at ASC
+      ) token_owner ON token_owner.link_token = t.via_token
+      WHERE t.signups_with_any_ad_param > 0
+        AND (${cutoff}::timestamptz IS NULL OR t.day >= ${cutoff}::date)
+    `,
+    sql`
+      SELECT
+        COUNT(*) FILTER (WHERE status IN ('lead', 'converted')) AS signups
+      FROM referrals
+      WHERE status <> 'deleted'
+        AND (${cutoff}::timestamptz IS NULL OR created_at >= ${cutoff}::timestamptz)
     `,
     sql`
       SELECT
@@ -400,6 +439,13 @@ export async function GET(req: NextRequest) {
       disabledAffiliates: Number(overviewRow?.disabled ?? 0),
       unnamedAffiliates: Number(overviewRow?.unnamed ?? 0),
       newAffiliates: Number(overviewRow?.new_in_window ?? 0),
+      onboardedToday: Number(overviewRow?.onboarded_today ?? 0),
+      fraudAffiliates: Number(overviewRow?.fraud_affiliates ?? 0),
+      dubAffiliates: Number(overviewRow?.dub_affiliates ?? 0),
+      adRunningAffiliates: Number(adRunnerStats[0]?.ad_running_affiliates ?? 0),
+      totalSignups: range === 'all'
+        ? Number(overviewRow?.source_signups ?? 0)
+        : Number(signupStats[0]?.signups ?? 0),
       totalReferrals: range === 'all'
         ? Number(overviewRow?.source_referrals ?? 0)
         : Number(referralStats[0]?.total ?? 0),
@@ -423,9 +469,14 @@ export async function GET(req: NextRequest) {
       name: [row.first_name, row.last_name].filter(Boolean).join(' ') || String(row.email),
       email: String(row.email ?? ''),
       status: String(row.status),
+      source: String(row.source ?? 'rewardful'),
       createdAt: String(row.created_at),
       referrals: range === 'all' ? Number(row.source_visitors ?? 0) : Number(row.referrals),
-      signups: range === 'all' ? Number(row.source_leads ?? 0) : Number(row.signups),
+      // Rewardful's leads counter drops converted customers; add them back so
+      // per-affiliate all-time sign-ups can never be below conversions.
+      signups: range === 'all'
+        ? Number(row.source_leads ?? 0) + (String(row.source ?? 'rewardful') === 'dub' ? 0 : Number(row.source_conversions ?? 0))
+        : Number(row.signups),
       conversions: range === 'all' ? Number(row.source_conversions ?? 0) : Number(row.conversions),
       referralsToday: Number(row.referrals_today),
       conversionsToday: Number(row.conversions_today),

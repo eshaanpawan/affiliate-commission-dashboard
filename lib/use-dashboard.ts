@@ -5,15 +5,17 @@
 // uses this instead of re-implementing the fetch + localStorage hydration
 // that used to live inline in the old single-page dashboard.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDashboardRange } from '@/components/DashboardRangeProvider';
 import type { DashboardRange } from '@/lib/dashboard-range';
+import { idbGet, idbSet, memGet, memSet, trackRefresh } from '@/lib/client-cache';
 
 export interface Affiliate {
   id: string;
   name: string;
   email: string;
   status: string;
+  source: string;
   createdAt: string;
   referrals: number;
   signups: number;
@@ -46,6 +48,11 @@ export interface DashboardData {
     disabledAffiliates: number;
     unnamedAffiliates: number;
     newAffiliates: number;
+    onboardedToday: number;
+    totalSignups: number;
+    fraudAffiliates: number;
+    dubAffiliates: number;
+    adRunningAffiliates: number;
   };
   charts: {
     dailyAffiliates: { day: string; count: number }[];
@@ -141,6 +148,20 @@ const dashboardCache = new Map<string, { at: number; data: DashboardData }>();
 const dashboardRequests = new Map<string, Promise<DashboardData>>();
 const MEMORY_CACHE_MS = 15_000;
 
+const snapshotKey = (range: DashboardRange) => `dashboard:${range}`;
+
+/** Best cached snapshot for a range: warm module memory (survives client-side
+ * navigation, read synchronously) — the IndexedDB copy is promoted into it
+ * on first read after a hard reload. */
+function getSnapshot(range: DashboardRange): DashboardData | null {
+  return memGet<DashboardData>(snapshotKey(range));
+}
+
+function storeSnapshot(range: DashboardRange, data: DashboardData): void {
+  memSet(snapshotKey(range), data);
+  idbSet(snapshotKey(range), data); // fire-and-forget persistence for hard reloads
+}
+
 async function fetchDashboard(range: DashboardRange, refreshVersion: number): Promise<DashboardData> {
   const key = `${range}:${refreshVersion}`;
   const cached = dashboardCache.get(key);
@@ -149,14 +170,15 @@ async function fetchDashboard(range: DashboardRange, refreshVersion: number): Pr
   const inFlight = dashboardRequests.get(key);
   if (inFlight) return inFlight;
 
-  const request = fetch(`/api/dashboard?period=${range}`, { cache: 'no-store' })
+  const request = trackRefresh(fetch(`/api/dashboard?period=${range}`, { cache: 'no-store' })
     .then(async (response) => {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload?.error ?? `Dashboard request failed (${response.status})`);
       dashboardCache.set(key, { at: Date.now(), data: payload });
+      storeSnapshot(range, payload as DashboardData);
       return payload as DashboardData;
     })
-    .finally(() => dashboardRequests.delete(key));
+    .finally(() => dashboardRequests.delete(key)));
 
   dashboardRequests.set(key, request);
   return request;
@@ -165,26 +187,58 @@ async function fetchDashboard(range: DashboardRange, refreshVersion: number): Pr
 export function useDashboard(rangeOverride?: DashboardRange | null) {
   const dashboardRange = useDashboardRange();
   const effectiveRange = rangeOverride ?? dashboardRange.range;
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  // Hydrate synchronously from the warm snapshot so the first paint shows data.
+  const [data, setData] = useState<DashboardData | null>(() => getSnapshot(effectiveRange));
+  const [loading, setLoading] = useState(() => getSnapshot(effectiveRange) === null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(() => {
+    const snap = getSnapshot(effectiveRange);
+    return snap?.meta?.generatedAt ? new Date(snap.meta.generatedAt) : null;
+  });
   const [error, setError] = useState<string | null>(null);
+  const rangeRef = useRef(effectiveRange);
+  rangeRef.current = effectiveRange;
 
   const load = useCallback(async () => {
-    setLoading(true);
+    const range = effectiveRange;
+    const stale = getSnapshot(range);
+    // Stale-while-revalidate: show the cached snapshot immediately (also
+    // covers switching ranges — the previous range's data is swapped out for
+    // the new range's snapshot instead of a blank loading state).
+    setData(stale);
+    setLoading(stale === null);
     setError(null);
-    setData(null);
+    if (stale?.meta?.generatedAt) setLastUpdated(new Date(stale.meta.generatedAt));
+
+    // After a hard reload the module memory is empty — race a fast IndexedDB
+    // read against the network and paint whichever lands first.
+    if (stale === null) {
+      idbGet<DashboardData>(snapshotKey(range))
+        .then((persisted) => {
+          if (!persisted || rangeRef.current !== range) return;
+          memSet(snapshotKey(range), persisted);
+          setData((current) => {
+            if (current) return current; // network already won
+            setLoading(false);
+            if (persisted.meta?.generatedAt) setLastUpdated(new Date(persisted.meta.generatedAt));
+            return persisted;
+          });
+        })
+        .catch(() => {});
+    }
+
     try {
-      const json = await fetchDashboard(effectiveRange, dashboardRange.refreshVersion);
+      const json = await fetchDashboard(range, dashboardRange.refreshVersion);
+      if (rangeRef.current !== range) return;
       setData(json);
       const now = json.meta?.generatedAt ? new Date(json.meta.generatedAt) : new Date();
       setLastUpdated(now);
+      setError(null);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : 'Failed to load dashboard';
-      setError(message);
+      if (rangeRef.current === range) setError(message);
       console.error(cause);
     } finally {
-      setLoading(false);
+      if (rangeRef.current === range) setLoading(false);
     }
   }, [dashboardRange.refreshVersion, effectiveRange]);
 

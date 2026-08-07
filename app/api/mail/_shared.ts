@@ -42,6 +42,14 @@ export function mailRouteError(error: unknown): NextResponse {
   return mailJson({ error: 'Mail request failed' }, 500);
 }
 
+/**
+ * Instantly thread ids are UUIDs for received threads but short base62-ish
+ * tokens (e.g. "2f-QZ5s03W9DDdSgwXunrI5eDd") for sent campaign emails.
+ */
+export function isThreadId(value: string): boolean {
+  return /^[A-Za-z0-9_-]{8,64}$/.test(value);
+}
+
 export function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,

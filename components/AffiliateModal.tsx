@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CalendarClock, CircleDollarSign, Clock3, Landmark } from 'lucide-react';
+import { CalendarClock, CircleDollarSign, Clock3, Landmark, MessageCircle } from 'lucide-react';
+import { dubMessageUrl, isDubPartner } from '@/lib/dub-links';
 
 import { DayOnDayChart } from '@/components/DayOnDayChart';
 import { fmtCents as fmt, pct } from '@/lib/format';
@@ -206,7 +207,21 @@ export function AffiliateModal({ affiliate, ftsCountries, ftsTotal, onClose }: {
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{affiliate.name}</DialogTitle>
-          <DialogDescription>{affiliate.email}</DialogDescription>
+          <DialogDescription>
+            {isDubPartner(affiliate.source, affiliate.id) ? (
+              <a
+                href={dubMessageUrl(affiliate.id)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-indigo-600 hover:underline dark:text-indigo-400"
+              >
+                <MessageCircle className="size-3.5" />
+                {affiliate.email || 'Message on Dub'} — open Dub message center
+              </a>
+            ) : (
+              <a href={`mailto:${affiliate.email}`} className="hover:underline">{affiliate.email}</a>
+            )}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

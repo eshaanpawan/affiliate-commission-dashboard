@@ -5,7 +5,9 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  Activity,
   Banknote,
+  CircleUserRound,
   CalendarRange,
   ChartNoAxesCombined,
   CircleCheckBig,
@@ -48,6 +50,7 @@ const NAV_GROUPS = [
     items: [
       { href: '/', label: 'Overview', icon: Gauge },
       { href: '/monthly', label: 'Monthly', icon: CalendarRange },
+      { href: '/events', label: 'Live events', icon: Activity },
       { href: '/leaderboard', label: 'Leaderboard', icon: Trophy },
     ],
   },
@@ -56,16 +59,16 @@ const NAV_GROUPS = [
     items: [
       { href: '/affiliates', label: 'Affiliates', icon: Users },
       { href: '/countries', label: 'Countries', icon: Globe },
+      { href: '/audience', label: 'Audience', icon: CircleUserRound },
       { href: '/funnel', label: 'Funnel vs Google', icon: Filter },
       { href: '/growth', label: 'Growth workspace', icon: Sparkles },
-      { href: '/mail', label: 'Mail center', icon: Mail },
+      { href: '/mail', label: 'Messages (Dub)', icon: Mail },
     ],
   },
   {
     label: 'Risk & money',
     items: [
       { href: '/warroom', label: 'Fraud War Room', icon: Siren, badgeKey: 'highRisk' as const },
-      { href: '/payouts', label: 'Payout Review', icon: Banknote, badgeKey: 'heldCount' as const },
       { href: '/enforcement', label: 'Enforcement Log', icon: ScrollText },
     ],
   },
@@ -79,7 +82,7 @@ export function AppSidebar({ badges }: { badges?: { highRisk?: number; heldCount
   const [health, setHealth] = React.useState<{
     rewardful?: { state: string; affiliateRows: number; lastSyncedAt: string | null };
     posthog?: { state: string };
-    instantly?: { state: string };
+    dub?: { state: string; partnerRows?: number };
     badges?: { highRisk?: number; heldCount?: number };
   } | null>(null);
 
@@ -198,11 +201,16 @@ export function AppSidebar({ badges }: { badges?: { highRisk?: number; heldCount
                 : <CircleAlert className="size-3 text-amber-600 dark:text-amber-400" />}
               PostHog {health?.posthog?.state ?? 'checking'}
             </span>
-            <span className="flex items-center gap-1.5">
-              {health?.instantly?.state === 'configured'
+            <span
+              className="flex items-center gap-1.5"
+              title={health?.dub?.partnerRows
+                ? `${health.dub.partnerRows.toLocaleString()} Dub partners synchronized`
+                : undefined}
+            >
+              {health?.dub?.state === 'healthy'
                 ? <CircleCheckBig className="size-3 text-emerald-600 dark:text-emerald-400" />
                 : <CircleAlert className="size-3 text-amber-600 dark:text-amber-400" />}
-              Instantly {health?.instantly?.state ?? 'checking'}
+              Dub {health?.dub?.state ?? 'checking'}
             </span>
           </div>
         </div>

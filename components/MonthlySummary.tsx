@@ -35,19 +35,16 @@ import { useDashboardRange } from '@/components/DashboardRangeProvider';
 import { ChartRangeTabs } from '@/components/RangeTabs';
 import type { DashboardRange } from '@/lib/dashboard-range';
 
-interface MonthlyRow {
-  month: string;
-  visitors: number;
-  leads: number;
-  conversions: number;
-  salesCents: number;
-  commissionsCents: number;
-  netCents: number;
-}
+import type { MonthlyResponse, ReportBucket } from '@/lib/use-monthly-report';
 
-interface MonthlyResponse {
-  months: MonthlyRow[];
-  totals: Omit<MonthlyRow, 'month'>;
+/** External report window — when provided the card renders the given data
+ * instead of fetching its own, and hides the per-card range tabs. */
+export interface MonthlySummaryReport {
+  data: MonthlyResponse | null;
+  error: string | null;
+  bucket: ReportBucket;
+  csvName: string;
+  description?: string;
 }
 
 const chartConfig = {
@@ -68,40 +65,55 @@ function fmtCents(cents: number): string {
 }
 
 function fmtMonthLabel(month: string): string {
-  const [y, m] = month.split('-').map(Number);
+  const parts = month.split('-').map(Number);
+  if (parts.length === 3) {
+    // Day bucket: 'YYYY-MM-DD' → 'Aug 5'
+    return new Date(parts[0], parts[1] - 1, parts[2]).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+  const [y, m] = parts;
   return new Date(y, m - 1, 1).toLocaleDateString('en-US', {
     month: 'short',
     year: 'numeric',
   });
 }
 
-export function MonthlySummary({ compact = false }: { compact?: boolean }) {
+export function MonthlySummary({ compact = false, report }: { compact?: boolean; report?: MonthlySummaryReport }) {
   const { range: globalRange, refreshVersion } = useDashboardRange();
   const [rangeOverride, setRangeOverride] = React.useState<DashboardRange | null>(null);
-  const effectiveRange = rangeOverride ?? globalRange;
-  const [data, setData] = React.useState<MonthlyResponse | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
+  // Month-granularity data can't render a 24h window — widen to 30d instead.
+  const requestedRange = rangeOverride ?? globalRange;
+  const effectiveRange = requestedRange === '24h' ? '30d' : requestedRange;
+  const [selfData, setSelfData] = React.useState<MonthlyResponse | null>(null);
+  const [selfError, setSelfError] = React.useState<string | null>(null);
   const [cumulative, setCumulative] = React.useState(false);
 
   React.useEffect(() => {
+    if (report) return; // externally driven — no self-fetch
     let cancelled = false;
-    setData(null);
-    setError(null);
+    setSelfData(null);
+    setSelfError(null);
     fetch(`/api/monthly?period=${effectiveRange}`, { cache: 'no-store' })
       .then((res) => {
         if (!res.ok) throw new Error(`Request failed (${res.status})`);
         return res.json();
       })
       .then((json: MonthlyResponse) => {
-        if (!cancelled) setData(json);
+        if (!cancelled) setSelfData(json);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load');
+        if (!cancelled) setSelfError(err instanceof Error ? err.message : 'Failed to load');
       });
     return () => {
       cancelled = true;
     };
-  }, [effectiveRange, refreshVersion]);
+  }, [effectiveRange, refreshVersion, report]);
+
+  const data = report ? report.data : selfData;
+  const error = report ? report.error : selfError;
+  const daily = report?.bucket === 'day';
 
   const chartData = React.useMemo(() => {
     if (!data) return [];
@@ -132,7 +144,7 @@ export function MonthlySummary({ compact = false }: { compact?: boolean }) {
 
   const downloadCsv = React.useCallback(() => {
     if (!data) return;
-    const header = 'Month,Visitors,Leads,Conversions,Sales,Commissions,Net';
+    const header = `${daily ? 'Day' : 'Month'},Visitors,Leads,Conversions,Sales,Commissions,Net`;
     const lines = data.months.map((m) =>
       [
         m.month,
@@ -150,22 +162,24 @@ export function MonthlySummary({ compact = false }: { compact?: boolean }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'monthly-summary.csv';
+    a.download = report?.csvName ?? 'monthly-summary.csv';
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-  }, [data]);
+  }, [data, daily, report]);
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Monthly Summary</CardTitle>
+        <CardTitle>{daily ? 'Daily Summary' : 'Monthly Summary'}</CardTitle>
         <CardDescription>
-          Month-by-month activity across the affiliate program
+          {report?.description ?? (daily
+            ? 'Day-by-day activity within the selected report window'
+            : 'Month-by-month activity across the affiliate program')}
         </CardDescription>
         <CardAction className="flex flex-wrap items-center justify-end gap-3">
-          <ChartRangeTabs value={rangeOverride} globalRange={globalRange} onChange={setRangeOverride} />
+          {!report && <ChartRangeTabs value={rangeOverride} globalRange={globalRange === '24h' ? '30d' : globalRange} onChange={setRangeOverride} ranges={['7d', '30d', '90d', 'all']} />}
           <div className="flex items-center gap-2">
             <Switch
               id="monthly-cumulative"
@@ -193,7 +207,7 @@ export function MonthlySummary({ compact = false }: { compact?: boolean }) {
           </div>
         ) : data.months.length === 0 ? (
           <div className="text-muted-foreground flex h-40 items-center justify-center text-sm">
-            No monthly data yet
+            No data for this window yet
           </div>
         ) : (
           <>
@@ -250,13 +264,25 @@ export function MonthlySummary({ compact = false }: { compact?: boolean }) {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Month</TableHead>
-                    <TableHead className="text-right">Visitors</TableHead>
-                    <TableHead className="text-right">Leads</TableHead>
-                    <TableHead className="text-right">Conversions</TableHead>
-                    <TableHead className="text-right">Sales</TableHead>
-                    <TableHead className="text-right">Commissions</TableHead>
-                    <TableHead className="text-right">Net</TableHead>
+                    <TableHead>{daily ? 'Day' : 'Month'}</TableHead>
+                    <TableHead className="text-right" title="People who clicked an affiliate link (?via=token) and landed on runable.com">
+                      Visitors <span className="text-muted-foreground font-normal">(clicks)</span>
+                    </TableHead>
+                    <TableHead className="text-right" title="Visitors who created a Runable account but have not paid yet">
+                      Leads <span className="text-muted-foreground font-normal">(sign-ups)</span>
+                    </TableHead>
+                    <TableHead className="text-right" title="Accounts that made their first paid subscription">
+                      Conversions <span className="text-muted-foreground font-normal">(paid)</span>
+                    </TableHead>
+                    <TableHead className="text-right" title="Subscription revenue those paid accounts brought in, attributed to affiliates">
+                      Sales <span className="text-muted-foreground font-normal">(revenue)</span>
+                    </TableHead>
+                    <TableHead className="text-right" title="The cut owed to affiliates for driving those sales">
+                      Commissions <span className="text-muted-foreground font-normal">(payout)</span>
+                    </TableHead>
+                    <TableHead className="text-right" title="What Runable keeps: Sales minus Commissions">
+                      Net <span className="text-muted-foreground font-normal">(profit)</span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

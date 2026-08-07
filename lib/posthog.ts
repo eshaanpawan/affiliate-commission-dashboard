@@ -446,7 +446,9 @@ export async function getFunnelTimingsForFTS(
   return out;
 }
 
-export async function getConversionCountriesByEmail(): Promise<Map<string, CountryData>> {
+export async function getConversionCountriesByEmail(sinceDays = 45): Promise<Map<string, CountryData>> {
+  // Unbounded, this three-way self-join scans all event history and hits
+  // PostHog's max execution time (504) — window every scan to recent events.
   const query = `
     SELECT
       s.distinct_id,
@@ -458,6 +460,7 @@ export async function getConversionCountriesByEmail(): Promise<Map<string, Count
       SELECT distinct_id, properties.email AS email
       FROM events
       WHERE event = 'sign_up' AND properties.email IS NOT NULL
+        AND timestamp > now() - INTERVAL ${sinceDays} DAY
       GROUP BY distinct_id, email
     ) e ON s.distinct_id = e.distinct_id
     LEFT JOIN (
@@ -468,10 +471,12 @@ export async function getConversionCountriesByEmail(): Promise<Map<string, Count
       FROM events
       WHERE event = '$pageview'
         AND properties.$geoip_country_code IS NOT NULL
+        AND timestamp > now() - INTERVAL ${sinceDays} DAY
       GROUP BY distinct_id, country_code, country_name
     ) p ON s.distinct_id = p.distinct_id
     WHERE s.event = 'subscription_updated'
       AND s.properties.isUserFirstPaidPlan = true
+      AND s.timestamp > now() - INTERVAL ${sinceDays} DAY
       AND p.country_code IS NOT NULL
     LIMIT 50000
   `;

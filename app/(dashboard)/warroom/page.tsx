@@ -5,12 +5,8 @@ import {
   Ban,
   CheckCircle2,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Crosshair,
   DollarSign,
   ExternalLink,
-  FileSearch,
   Globe2,
   KeyRound,
   Loader2,
@@ -20,10 +16,10 @@ import {
   Search,
   ShieldAlert,
   ShieldCheck,
-  UserRoundSearch,
-  Users,
 } from 'lucide-react';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, XAxis, YAxis } from 'recharts';
+import {
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Line, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis,
+} from 'recharts';
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
@@ -33,31 +29,26 @@ import type { DashboardRange } from '@/lib/dashboard-range';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  ChartConfig, ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent,
-} from '@/components/ui/chart';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
+import { Progress } from '@/components/ui/progress';
 import {
-  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
-} from '@/components/ui/sheet';
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { PageControls } from '@/components/PageControls';
+import { ExpandableRows } from '@/components/ExpandableRows';
 
 /* ---------- types mirrored from /api/warroom ---------- */
 
 interface RiskSignal { key: string; label: string; severity: string; value: string; detail: string }
 interface WarAffiliate {
-  id: string; name: string; email: string | null;
+  id: string; name: string; email: string | null; source: string;
   rewardfulStatus: string; reviewStatus: string; enforcementState: string;
   fraudTags: string[]; tokens: string[];
   unpaidCommissionCents: number; paidCommissionCents: number;
@@ -86,7 +77,7 @@ interface WarRoomData {
     totalSignups: number; adSignups: number; adPct: number; totalFts: number; totalPageviews: number;
     affiliatesRunningAds: number; campaignHijackers: number; ringMembers: number;
     highRisk: number; mediumRisk: number; unpaidAtRiskCents: number; unpaidTotalCents: number;
-    proposedBans: number; banned: number;
+    proposedBans: number; banned: number; dubFlagged: number;
     networkSignups: Record<AdNetworkKey, number>;
   };
   daily: { day: string; signups: number; adSignups: number; organicSignups: number; fts: number; pageviews: number }[];
@@ -113,27 +104,55 @@ const fmtUsd = (c: number) => '$' + (c / 100).toLocaleString('en-US', { minimumF
 const fmtInt = (n: number) => n.toLocaleString();
 
 function bandBadge(band: string) {
-  return band === 'high' ? 'border-red-200 bg-red-100 text-red-700 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-300'
-    : band === 'medium' ? 'border-amber-200 bg-amber-100 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
-    : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300';
+  return band === 'high' ? 'rounded-full border-red-300 bg-red-100 text-red-700 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-300'
+    : band === 'medium' ? 'rounded-full border-amber-300 bg-amber-100 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
+    : 'rounded-full border-border bg-muted text-muted-foreground';
 }
+function dubTags(a: WarAffiliate): string[] {
+  return a.fraudTags.filter((tag) => tag.startsWith('dub:'));
+}
+function SourceBadge({ source }: { source: string }) {
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        'rounded-full px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wide',
+        source === 'dub'
+          ? 'border-violet-300 bg-violet-100 text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/15 dark:text-violet-300'
+          : 'border-sky-300 bg-sky-100 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300',
+      )}
+    >
+      {source}
+    </Badge>
+  );
+}
+const DUB_TAG_BADGE = 'rounded-full border-red-300 bg-red-100 font-mono text-[10px] text-red-700 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-300';
 function enforcementBadge(state: string) {
-  return state === 'banned' ? 'bg-red-600 text-white'
-    : state === 'proposed_ban' ? 'bg-amber-500 text-white'
-    : state === 'cleared' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
-    : 'bg-muted text-muted-foreground';
+  return state === 'banned' ? 'rounded-full bg-red-600 text-white'
+    : state === 'proposed_ban' ? 'rounded-full bg-amber-500 text-white'
+    : state === 'cleared' ? 'rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+    : 'rounded-full bg-muted text-muted-foreground';
 }
 
-const DAILY_CONFIG = {
-  adSignups: { label: 'Ad-driven signups', color: 'var(--chart-1)' },
-  organicSignups: { label: 'Organic signups', color: 'var(--chart-2)' },
-  fts: { label: 'Paid conversions (FTS)', color: 'var(--chart-3)' },
-} satisfies ChartConfig;
+const CHART_TOOLTIP_STYLE = {
+  background: 'var(--popover)',
+  border: '1px solid var(--border)',
+  borderRadius: 8,
+  fontSize: 12,
+} as const;
 
-const FUNNEL_CONFIG = {
-  ad: { label: 'Ad-driven', color: 'var(--chart-1)' },
-  organic: { label: 'Organic', color: 'var(--chart-2)' },
-} satisfies ChartConfig;
+function ChartDotLegend({ entries }: { entries: { label: string; color: string }[] }) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+      {entries.map((entry) => (
+        <div key={entry.label} className="flex items-center gap-1.5">
+          <span className="size-2 shrink-0 rounded-full" style={{ background: entry.color }} />
+          <span className="text-muted-foreground truncate">{entry.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const warRoomCache = new Map<string, { at: number; data: WarRoomData }>();
 const warRoomRequests = new Map<string, Promise<WarRoomData>>();
@@ -193,27 +212,49 @@ function TrafficChartCard() {
   const [rangeOverride, setRangeOverride] = useState<DashboardRange | null>(null);
   const { data, loading } = useWarRoomWindow(rangeOverride);
   return (
-    <Card className="gap-4 xl:col-span-2">
+    <Card className="h-full gap-4 lg:col-span-8">
       <CardHeader>
         <CardTitle className="text-sm">Signups per day — ad-driven vs organic</CardTitle>
-        <CardDescription className="text-xs">Stacked signups with paid conversions (FTS) overlaid</CardDescription>
+        <CardDescription className="text-xs">How much of daily signup volume someone paid for — spikes in the ad-driven band mean affiliates buying traffic</CardDescription>
         <CardAction><ChartRangeTabs value={rangeOverride} globalRange={globalRange} onChange={setRangeOverride} /></CardAction>
       </CardHeader>
       <CardContent>
         {loading || !data ? <Skeleton className="h-[280px] w-full" /> : (
-          <ChartContainer config={DAILY_CONFIG} className="h-[280px] w-full">
-            <AreaChart data={data.daily} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-              <CartesianGrid vertical={false} strokeDasharray="3 3" />
-              <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} tickFormatter={(value: string) => new Date(`${value}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} />
-              <YAxis yAxisId="left" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
-              <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
-              <ChartTooltip content={<ChartTooltipContent labelFormatter={(value) => new Date(`${String(value)}T12:00:00`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })} />} />
-              <ChartLegend content={<ChartLegendContent />} />
-              <Area yAxisId="left" dataKey="adSignups" stackId="s" type="monotone" fill="var(--color-adSignups)" fillOpacity={0.5} stroke="var(--color-adSignups)" />
-              <Area yAxisId="left" dataKey="organicSignups" stackId="s" type="monotone" fill="var(--color-organicSignups)" fillOpacity={0.5} stroke="var(--color-organicSignups)" />
-              <Line yAxisId="right" dataKey="fts" type="monotone" stroke="var(--color-fts)" strokeWidth={2} dot={false} />
-            </AreaChart>
-          </ChartContainer>
+          <>
+            <div className="h-[280px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={data.daily} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="warAdGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--chart-2)" stopOpacity={0.9} />
+                      <stop offset="95%" stopColor="var(--chart-1)" stopOpacity={0.2} />
+                    </linearGradient>
+                    <linearGradient id="warOrganicGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--chart-2)" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="var(--chart-2)" stopOpacity={0.05} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
+                  <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={11} tickMargin={8} minTickGap={24} tickFormatter={(value: string) => new Date(`${value}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} />
+                  <YAxis yAxisId="left" tickLine={false} axisLine={false} fontSize={11} />
+                  <YAxis yAxisId="right" orientation="right" tickLine={false} axisLine={false} fontSize={11} />
+                  <RechartsTooltip
+                    cursor={{ fill: 'var(--muted)' }}
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                    labelFormatter={(value) => new Date(`${String(value)}T12:00:00`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                  />
+                  <Area yAxisId="left" dataKey="adSignups" name="Ad-driven signups" stackId="s" type="monotone" fill="url(#warAdGradient)" stroke="var(--chart-1)" strokeWidth={2} />
+                  <Area yAxisId="left" dataKey="organicSignups" name="Organic signups" stackId="s" type="monotone" fill="url(#warOrganicGradient)" stroke="var(--chart-2)" strokeWidth={2} />
+                  <Line yAxisId="right" dataKey="fts" name="Paid conversions (FTS)" type="monotone" stroke="var(--chart-3)" strokeWidth={2} dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+            <ChartDotLegend entries={[
+              { label: 'Ad-driven signups', color: 'var(--chart-1)' },
+              { label: 'Organic signups', color: 'var(--chart-2)' },
+              { label: 'Paid conversions (FTS)', color: 'var(--chart-3)' },
+            ]} />
+          </>
         )}
       </CardContent>
     </Card>
@@ -231,21 +272,37 @@ function ProgramFunnelCard() {
     { stage: 'Paid (FTS)', ad: null, organic: null, total: summary.totalFts },
   ] : [];
   return (
-    <Card className="gap-4">
+    <Card className="h-full gap-4 lg:col-span-4">
       <CardHeader>
         <CardTitle className="text-sm">Program funnel</CardTitle>
-        <CardDescription className="text-xs">Pageview → Signup → Paid, ad vs organic</CardDescription>
+        <CardDescription className="text-xs">Pageview → Signup → Paid — a wide ad band that never converts to Paid signals junk traffic</CardDescription>
         <CardAction><ChartRangeTabs value={rangeOverride} globalRange={globalRange} onChange={setRangeOverride} /></CardAction>
       </CardHeader>
       <CardContent className="grid gap-4">
         {loading || !summary ? <Skeleton className="h-[220px] w-full" /> : <>
-          <ChartContainer config={FUNNEL_CONFIG} className="h-[170px] w-full">
-            <BarChart data={funnelData.filter((row) => row.ad !== null)} layout="vertical" margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
-              <XAxis type="number" hide /><YAxis type="category" dataKey="stage" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} width={70} />
-              <ChartTooltip content={<ChartTooltipContent />} /><ChartLegend content={<ChartLegendContent />} />
-              <Bar dataKey="ad" stackId="f" fill="var(--color-ad)" radius={[3, 0, 0, 3]} /><Bar dataKey="organic" stackId="f" fill="var(--color-organic)" radius={[0, 3, 3, 0]} />
-            </BarChart>
-          </ChartContainer>
+          <div>
+            <div className="h-[170px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={funnelData.filter((row) => row.ad !== null)} layout="vertical" margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="warFunnelGradient" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="5%" stopColor="var(--chart-2)" />
+                      <stop offset="95%" stopColor="var(--chart-1)" />
+                    </linearGradient>
+                  </defs>
+                  <XAxis type="number" hide />
+                  <YAxis type="category" dataKey="stage" tickLine={false} axisLine={false} fontSize={11} width={70} />
+                  <RechartsTooltip cursor={{ fill: 'var(--muted)' }} contentStyle={CHART_TOOLTIP_STYLE} />
+                  <Bar dataKey="ad" name="Ad-driven" stackId="f" fill="url(#warFunnelGradient)" radius={[5, 0, 0, 5]} />
+                  <Bar dataKey="organic" name="Organic" stackId="f" fill="var(--chart-2)" radius={[0, 5, 5, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <ChartDotLegend entries={[
+              { label: 'Ad-driven', color: 'var(--chart-1)' },
+              { label: 'Organic', color: 'var(--chart-2)' },
+            ]} />
+          </div>
           <div className="grid gap-1.5">{funnelData.map((row, index) => { const previous = funnelData[index - 1]; const rate = previous && previous.total > 0 ? (row.total / previous.total) * 100 : null; return <div key={row.stage} className="flex items-center justify-between text-xs"><span className="text-muted-foreground">{row.stage}</span><span className="font-medium tabular-nums">{fmtInt(row.total)}{rate !== null && <span className="text-muted-foreground ml-1.5">({rate.toFixed(1)}% of prev)</span>}</span></div>; })}</div>
         </>}
       </CardContent>
@@ -261,31 +318,31 @@ function Kpi({ icon: Icon, label, value, sub, tone, onClick, active }: {
   tone?: 'danger' | 'warn'; onClick?: () => void; active?: boolean;
 }) {
   const content = (
-    <CardHeader className="px-4">
-      <div className="flex items-center gap-2">
+    <CardContent className="p-0">
+      <div className="flex items-center justify-between gap-2">
+        <dt className="text-muted-foreground text-sm font-medium">{label}</dt>
         <div className={cn(
-          'flex size-8 shrink-0 items-center justify-center rounded-md',
+          'flex size-8 shrink-0 items-center justify-center rounded-xl',
           tone === 'danger' ? 'bg-red-100 text-red-600 dark:bg-red-500/20 dark:text-red-400'
             : tone === 'warn' ? 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400'
             : 'bg-primary/10 text-primary',
         )}>
           <Icon className="size-4" />
         </div>
-        <CardDescription className="text-xs font-medium">{label}</CardDescription>
       </div>
-      <CardTitle className="mt-1 text-2xl tabular-nums">{value}</CardTitle>
-      {sub && <p className="text-[11px] text-muted-foreground">{sub}</p>}
-    </CardHeader>
+      <dd className="text-foreground mt-2 text-3xl font-semibold tabular-nums">{value}</dd>
+      {sub && <p className="text-muted-foreground mt-1 text-xs">{sub}</p>}
+    </CardContent>
   );
 
   return (
     <Card
       className={cn(
-        'gap-1 overflow-hidden py-0',
-        onClick && 'hover:border-primary/40',
+        'w-full gap-0 overflow-hidden p-6 py-4',
+        onClick && 'cursor-pointer transition-shadow hover:shadow-md',
         active && 'border-primary ring-primary/20 ring-2',
-        tone === 'danger' && 'border-red-200 bg-red-50/60 dark:border-red-500/30 dark:bg-red-500/10',
-        tone === 'warn' && 'border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-500/10',
+        tone === 'danger' && 'bg-linear-to-tr from-red-200/40 to-red-100/40 dark:from-red-950/40 dark:to-red-900/40 border-red-300 dark:border-red-950 shadow-none',
+        tone === 'warn' && 'bg-linear-to-tr from-amber-200/40 to-amber-100/40 dark:from-amber-950/40 dark:to-amber-900/40 border-amber-300 dark:border-amber-950 shadow-none',
       )}
     >
       {onClick ? (
@@ -293,109 +350,79 @@ function Kpi({ icon: Icon, label, value, sub, tone, onClick, active }: {
           type="button"
           onClick={onClick}
           aria-pressed={active}
-          className="w-full py-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          className="w-full text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
         >
           {content}
         </button>
       ) : (
-        <div className="py-4">{content}</div>
+        content
       )}
     </Card>
   );
 }
 
+function flagEmoji(code: string): string {
+  if (!/^[A-Z]{2}$/i.test(code)) return '🌐';
+  return String.fromCodePoint(...[...code.toUpperCase()].map((c) => 0x1f1a5 + c.charCodeAt(0)));
+}
+
 function NetworkEvidenceCard({ counts }: { counts: Record<AdNetworkKey, number> }) {
   const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
-  const max = Math.max(1, ...Object.values(counts));
+  const active = AD_NETWORKS
+    .filter((network) => counts[network.key] > 0)
+    .sort((a, b) => counts[b.key] - counts[a.key]);
+  const zero = AD_NETWORKS.filter((network) => counts[network.key] === 0);
 
   return (
-    <Card className="gap-0 overflow-hidden py-0">
-      <CardHeader className="border-b py-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Network className="size-4" />
-              Paid-network evidence
-            </CardTitle>
-            <CardDescription className="mt-1 max-w-3xl text-xs">
-              Distinct signups carrying each network&apos;s click identifier on the first-touch URL. Counts can overlap
-              when a redirect preserves more than one identifier; they prove attributed traffic, not who bought the ad.
-            </CardDescription>
-          </div>
-          <Badge variant="outline" className="tabular-nums">{fmtInt(total)} network observations</Badge>
-        </div>
+    <Card className="h-full gap-4 lg:col-span-6">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Network className="size-4" />
+          Paid-network evidence
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Signups arriving with each ad network&apos;s click ID — attributed traffic someone paid for. Investigate the top networks first.
+        </CardDescription>
+        <CardAction>
+          <Badge variant="outline" className="rounded-full tabular-nums">{fmtInt(total)} signups</Badge>
+        </CardAction>
       </CardHeader>
-      <CardContent className="grid gap-2 p-4 sm:grid-cols-2 xl:grid-cols-4">
-        {AD_NETWORKS.map((network) => (
-          <div key={network.key} className="rounded-xl border bg-muted/20 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-xs font-semibold">{network.label}</p>
-                <p className="truncate text-[10px] text-muted-foreground">{network.evidence}</p>
+      <CardContent className="grid gap-3">
+        {active.length === 0 ? (
+          <p className="text-muted-foreground text-xs">No paid click identifiers were seen on any signup in this window.</p>
+        ) : (
+          active.slice(0, 4).map((network) => (
+            <div key={network.key} className="flex items-center">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                <Megaphone className="size-4" />
               </div>
-              <p className="text-lg font-semibold tabular-nums">{fmtInt(counts[network.key])}</p>
+              <div className="ml-3 min-w-0 flex-1 space-y-1">
+                <div className="flex items-baseline gap-2">
+                  <p className="text-sm leading-none font-medium">{network.label}</p>
+                  <p className="truncate font-mono text-[10px] text-muted-foreground">{network.evidence}</p>
+                </div>
+                <Progress value={total ? (counts[network.key] / total) * 100 : 0} className="h-1" />
+              </div>
+              <div className="ms-auto pl-4 text-sm font-medium tabular-nums">{fmtInt(counts[network.key])}</div>
             </div>
-            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full rounded-full bg-primary transition-[width]"
-                style={{ width: `${counts[network.key] === 0 ? 0 : Math.max(3, (counts[network.key] / max) * 100)}%` }}
-              />
-            </div>
-          </div>
-        ))}
+          ))
+        )}
+        {zero.length > 0 && active.length > 0 && (
+          <p className="text-muted-foreground text-[11px]">
+            No signals from {zero.map((network) => network.label).join(', ')}.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
 }
 
-function PaginationControls({
-  page,
-  totalPages,
-  totalItems,
-  pageSize,
-  itemLabel,
-  onPageChange,
-}: {
-  page: number;
-  totalPages: number;
-  totalItems: number;
-  pageSize: number;
-  itemLabel: string;
-  onPageChange: (page: number) => void;
-}) {
-  const start = totalItems === 0 ? 0 : (page - 1) * pageSize + 1;
-  const end = Math.min(page * pageSize, totalItems);
-
+function ShowMoreToggle({ expanded, hidden, onToggle }: { expanded: boolean; hidden: number; onToggle: () => void }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/20 px-4 py-3">
-      <p className="text-xs text-muted-foreground">
-        Showing <span className="font-medium text-foreground tabular-nums">{start}–{end}</span> of{' '}
-        <span className="font-medium text-foreground tabular-nums">{totalItems}</span> {itemLabel}
-      </p>
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground tabular-nums">Page {page} of {totalPages}</span>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="outline"
-          aria-label={`Previous ${itemLabel} page`}
-          disabled={page <= 1}
-          onClick={() => onPageChange(page - 1)}
-        >
-          <ChevronLeft className="size-3.5" />
-        </Button>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="outline"
-          aria-label={`Next ${itemLabel} page`}
-          disabled={page >= totalPages}
-          onClick={() => onPageChange(page + 1)}
-        >
-          <ChevronRight className="size-3.5" />
-        </Button>
-      </div>
-    </div>
+    <Button type="button" size="sm" variant="ghost" className="h-7 justify-start px-1 text-xs text-muted-foreground" onClick={onToggle}>
+      <ChevronDown className={cn('size-3.5', expanded && 'rotate-180')} />
+      {expanded ? 'Show less' : `Show ${hidden} more`}
+    </Button>
   );
 }
 
@@ -413,17 +440,21 @@ function AffiliateSheet({ a, onClose, onAction, busy }: {
     { stage: 'Paid (FTS)', ad: null, organic: null, total: s.fts },
   ];
   return (
-    <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
-        <SheetHeader>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-h-[88vh] w-full overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
           <div className="flex flex-wrap items-center gap-2">
-            <SheetTitle>{a.name}</SheetTitle>
+            <DialogTitle>{a.name}</DialogTitle>
+            <SourceBadge source={a.source} />
             <Badge variant="outline" className={cn('font-bold', bandBadge(a.risk.band))}>Risk {a.risk.score}</Badge>
+            {dubTags(a).map((tag) => (
+              <Badge key={tag} variant="outline" className={DUB_TAG_BADGE}>{tag}</Badge>
+            ))}
             <Badge className={enforcementBadge(a.enforcementState)}>{a.enforcementState.replace('_', ' ')}</Badge>
             {a.holdStatus && <Badge variant="secondary">hold: {a.holdStatus}</Badge>}
           </div>
-          <SheetDescription>{a.email ?? 'no email'} · Rewardful {a.rewardfulStatus}</SheetDescription>
-        </SheetHeader>
+          <DialogDescription>{a.email ?? 'no email'} · Rewardful {a.rewardfulStatus}</DialogDescription>
+        </DialogHeader>
 
         <div className="grid gap-4 px-4 pb-6">
           {/* Actions */}
@@ -518,7 +549,12 @@ function AffiliateSheet({ a, onClose, onAction, busy }: {
                 {a.risk.signals.map((sig) => (
                   <div key={sig.key} className="bg-muted rounded-lg p-3">
                     <div className="flex items-center gap-2">
-                      <span className={cn('size-2 rounded-full', sig.severity === 'high' ? 'bg-red-500' : 'bg-amber-500')} />
+                      <Badge variant="outline" className={cn('rounded-full text-[10px]',
+                        sig.severity === 'high'
+                          ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-300'
+                          : 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300')}>
+                        {sig.severity}
+                      </Badge>
                       <p className="text-sm font-semibold">{sig.label}</p>
                       <span className="text-muted-foreground text-xs">{sig.value}</span>
                     </div>
@@ -600,85 +636,12 @@ function AffiliateSheet({ a, onClose, onAction, busy }: {
             )}
           </div>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
 
 type CampaignOverlap = WarRoomData['campaignOverlap'][number];
-
-function CampaignCase({
-  item,
-  onOpenAffiliate,
-}: {
-  item: CampaignOverlap;
-  onOpenAffiliate: (id: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const preview = item.affiliates.slice(0, 3).map((affiliate) => affiliate.name).join(', ');
-
-  return (
-    <Collapsible open={expanded} onOpenChange={setExpanded}>
-      <div className={cn(
-        'overflow-hidden rounded-xl border bg-card',
-        item.isOurs && 'border-red-200 dark:border-red-500/30',
-      )}>
-        <CollapsibleTrigger asChild>
-          <button
-            type="button"
-            className="flex w-full items-center gap-3 p-3 text-left outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          >
-            <div className={cn(
-              'flex size-9 shrink-0 items-center justify-center rounded-lg',
-              item.isOurs
-                ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
-                : 'bg-muted text-muted-foreground',
-            )}>
-              {item.isOurs ? <ShieldAlert className="size-4" /> : <Network className="size-4" />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-xs font-semibold">{item.campaignId}</span>
-                <Badge variant={item.isOurs ? 'destructive' : 'secondary'} className="text-[10px]">
-                  {item.isOurs ? 'Runable ID' : 'Shared ID'}
-                </Badge>
-              </div>
-              <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                {preview}{item.affiliates.length > 3 ? ` +${item.affiliates.length - 3} more` : ''}
-              </p>
-            </div>
-            <div className="text-right">
-              <p className="text-sm font-semibold tabular-nums">{item.affiliates.length}</p>
-              <p className="text-[10px] text-muted-foreground">affiliates</p>
-            </div>
-            <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground', expanded && 'rotate-180')} />
-          </button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="border-t bg-muted/25 p-3">
-            <p className="mb-2 text-[11px] font-medium text-muted-foreground">
-              Review every affiliate observed with this campaign identifier
-            </p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {item.affiliates.map((affiliate) => (
-                <button
-                  key={affiliate.id}
-                  type="button"
-                  onClick={() => onOpenAffiliate(affiliate.id)}
-                  className="flex min-w-0 items-center gap-2 rounded-lg border bg-background px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <UserRoundSearch className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium">{affiliate.name}</span>
-                  <span className="text-[10px] text-muted-foreground">Open</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </CollapsibleContent>
-      </div>
-    </Collapsible>
-  );
-}
 
 function CampaignOverlapSection({
   items,
@@ -687,141 +650,83 @@ function CampaignOverlapSection({
   items: CampaignOverlap[];
   onOpenAffiliate: (id: string) => void;
 }) {
-  const pageSize = 4;
-  const [runablePage, setRunablePage] = useState(1);
-  const [sharedPage, setSharedPage] = useState(1);
-  const runableItems = items.filter((item) => item.isOurs);
-  const sharedItems = items.filter((item) => !item.isOurs);
-  const affected = new Set(items.flatMap((item) => item.affiliates.map((affiliate) => affiliate.id))).size;
-  const runablePages = Math.max(1, Math.ceil(runableItems.length / pageSize));
-  const sharedPages = Math.max(1, Math.ceil(sharedItems.length / pageSize));
-  const activeRunablePage = Math.min(runablePage, runablePages);
-  const activeSharedPage = Math.min(sharedPage, sharedPages);
-  const visibleRunable = runableItems.slice(
-    (activeRunablePage - 1) * pageSize,
-    activeRunablePage * pageSize,
-  );
-  const visibleShared = sharedItems.slice(
-    (activeSharedPage - 1) * pageSize,
-    activeSharedPage * pageSize,
-  );
+  const [expanded, setExpanded] = useState(false);
+  const sorted = useMemo(() => [...items].sort((a, b) =>
+    Number(b.isOurs) - Number(a.isOurs) || b.affiliates.length - a.affiliates.length), [items]);
+  const visible = expanded ? sorted : sorted.slice(0, 5);
 
   return (
-    <Card className="gap-0 overflow-hidden py-0">
-      <CardHeader className="border-b py-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Network className="size-4" />
-              Campaign overlap investigations
-            </CardTitle>
-            <CardDescription className="mt-1 max-w-2xl text-xs">
-              Grouped cases replace the raw name dump. A matching ID is an association signal—not proof of
-              account ownership, keyword bidding, or wrongdoing.
-            </CardDescription>
-          </div>
-          <Badge variant="outline" className="gap-1 text-[10px]">
-            <ShieldCheck className="size-3" />
-            Evidence review required
-          </Badge>
-        </div>
+    <Card className="h-full gap-4 lg:col-span-6">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <ShieldAlert className="size-4" />
+          Campaign overlap
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Affiliate tokens seen alongside our own Google campaign IDs — likely brand bidding on our ads. Open each affiliate to review before acting.
+        </CardDescription>
+        <CardAction>
+          <Badge variant="outline" className="rounded-full tabular-nums">{fmtInt(items.length)} cases</Badge>
+        </CardAction>
       </CardHeader>
-
-      <div className="grid grid-cols-3 divide-x border-b bg-muted/25">
-        <div className="p-4">
-          <p className="text-[11px] text-muted-foreground">Runable IDs</p>
-          <p className="mt-1 text-xl font-semibold tabular-nums">{runableItems.length}</p>
-        </div>
-        <div className="p-4">
-          <p className="text-[11px] text-muted-foreground">Shared IDs</p>
-          <p className="mt-1 text-xl font-semibold tabular-nums">{sharedItems.length}</p>
-        </div>
-        <div className="p-4">
-          <p className="text-[11px] text-muted-foreground">Affiliates affected</p>
-          <p className="mt-1 text-xl font-semibold tabular-nums">{affected}</p>
-        </div>
-      </div>
-
-      <CardContent className="grid gap-6 p-4 lg:grid-cols-2 lg:p-5">
-        <section className="overflow-hidden rounded-xl border bg-card">
-          <div className="flex items-center justify-between gap-2 border-b p-3">
-            <div>
-              <h2 className="text-sm font-semibold">Runable campaign IDs</h2>
-              <p className="text-[11px] text-muted-foreground">Priority: validate source account and first-touch URL.</p>
-            </div>
-            <Badge variant="destructive" className="tabular-nums">{runableItems.length}</Badge>
-          </div>
-          <div className="grid gap-2 px-3 pb-3">
-            {visibleRunable.length > 0 ? visibleRunable.map((item) => (
-              <CampaignCase key={item.campaignId} item={item} onOpenAffiliate={onOpenAffiliate} />
-            )) : (
-              <div className="rounded-xl border border-dashed p-5 text-center">
-                <p className="text-sm font-medium">No Runable-ID overlap</p>
-                <p className="mt-1 text-xs text-muted-foreground">No owned campaign IDs were shared in this window.</p>
-              </div>
+      <CardContent className="grid gap-2">
+        {sorted.length === 0 ? (
+          <p className="text-muted-foreground text-xs">No campaign IDs were shared between affiliates in this window.</p>
+        ) : (
+          <>
+            {visible.map((item) => (
+              <button
+                key={item.campaignId}
+                type="button"
+                onClick={() => item.affiliates[0] && onOpenAffiliate(item.affiliates[0].id)}
+                className="flex min-w-0 items-center gap-3 rounded-lg p-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className={cn(
+                  'flex size-9 shrink-0 items-center justify-center rounded-lg',
+                  item.isOurs
+                    ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
+                    : 'bg-muted text-muted-foreground',
+                )}>
+                  <Network className="size-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-mono text-xs font-semibold">{item.campaignId}</p>
+                  <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                    {item.affiliates.slice(0, 3).map((affiliate) => affiliate.name).join(', ')}
+                    {item.affiliates.length > 3 ? ` +${item.affiliates.length - 3} more` : ''}
+                  </p>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn('rounded-full text-[10px]', item.isOurs ? bandBadge('high') : bandBadge('medium'))}
+                >
+                  {item.isOurs ? 'Runable ID' : 'Shared ID'}
+                </Badge>
+                <span className="shrink-0 text-xs font-semibold tabular-nums">{item.affiliates.length}</span>
+              </button>
+            ))}
+            {sorted.length > 5 && (
+              <ShowMoreToggle expanded={expanded} hidden={sorted.length - 5} onToggle={() => setExpanded((value) => !value)} />
             )}
-          </div>
-          <PaginationControls
-            page={activeRunablePage}
-            totalPages={runablePages}
-            totalItems={runableItems.length}
-            pageSize={pageSize}
-            itemLabel="Runable-ID cases"
-            onPageChange={setRunablePage}
-          />
-        </section>
-
-        <section className="overflow-hidden rounded-xl border bg-card">
-          <div className="flex items-center justify-between gap-2 border-b p-3">
-            <div>
-              <h2 className="text-sm font-semibold">Shared campaign identifiers</h2>
-              <p className="text-[11px] text-muted-foreground">Watchlist: may reflect agencies, templates, or copied URLs.</p>
-            </div>
-            <Badge variant="secondary" className="tabular-nums">{sharedItems.length}</Badge>
-          </div>
-          <div className="grid gap-2 px-3 pb-3">
-            {visibleShared.length > 0 ? visibleShared.map((item) => (
-              <CampaignCase key={item.campaignId} item={item} onOpenAffiliate={onOpenAffiliate} />
-            )) : (
-              <div className="rounded-xl border border-dashed p-5 text-center">
-                <p className="text-sm font-medium">No shared identifiers</p>
-                <p className="mt-1 text-xs text-muted-foreground">No multi-affiliate campaign clusters were found.</p>
-              </div>
-            )}
-          </div>
-          <PaginationControls
-            page={activeSharedPage}
-            totalPages={sharedPages}
-            totalItems={sharedItems.length}
-            pageSize={pageSize}
-            itemLabel="shared-ID cases"
-            onPageChange={setSharedPage}
-          />
-        </section>
+          </>
+        )}
       </CardContent>
     </Card>
   );
 }
 
 function CountryIntelligenceSection({ affiliates }: { affiliates: WarAffiliate[] }) {
-  const [page, setPage] = useState(1);
-  const pageSize = 8;
+  const [expanded, setExpanded] = useState(false);
   const countryRows = useMemo(() => {
     const countries = new Map<string, {
-      code: string;
-      name: string;
-      conversions: number;
-      affiliateIds: Set<string>;
-      highRiskIds: Set<string>;
+      code: string; name: string; conversions: number;
+      affiliateIds: Set<string>; highRiskIds: Set<string>;
     }>();
     for (const affiliate of affiliates) {
       for (const country of affiliate.countries) {
         const current = countries.get(country.code) ?? {
-          code: country.code,
-          name: country.name,
-          conversions: 0,
-          affiliateIds: new Set<string>(),
-          highRiskIds: new Set<string>(),
+          code: country.code, name: country.name, conversions: 0,
+          affiliateIds: new Set<string>(), highRiskIds: new Set<string>(),
         };
         current.conversions += country.conversions;
         current.affiliateIds.add(affiliate.id);
@@ -833,84 +738,47 @@ function CountryIntelligenceSection({ affiliates }: { affiliates: WarAffiliate[]
   }, [affiliates]);
 
   const totalAttributed = countryRows.reduce((sum, country) => sum + country.conversions, 0);
-  const affiliatesWithMarket = affiliates.filter((affiliate) => affiliate.countries.length > 0).length;
-  const maxConversions = Math.max(1, ...countryRows.map((country) => country.conversions));
-  const totalPages = Math.max(1, Math.ceil(countryRows.length / pageSize));
-  const activePage = Math.min(page, totalPages);
-  const visibleCountries = countryRows.slice((activePage - 1) * pageSize, activePage * pageSize);
+  const visible = expanded ? countryRows : countryRows.slice(0, 5);
 
   return (
-    <Card className="gap-0 overflow-hidden py-0">
-      <CardHeader className="border-b py-5">
-        <CardTitle className="flex items-center gap-2 text-base">
+    <Card className="h-full gap-4 lg:col-span-6">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
           <Globe2 className="size-4" />
-          Country risk intelligence
+          Conversion geography
         </CardTitle>
-        <CardDescription className="max-w-2xl text-xs">
-          Conversion geography joined to the affiliate evidence window. Use it to choose the country and device for
-          manual SERP verification; geography alone is not proof of fraud.
+        <CardDescription className="text-xs">
+          Where flagged affiliates&apos; conversions come from — pick the country and device for manual SERP checks; geography alone is not proof.
         </CardDescription>
+        <CardAction>
+          <Badge variant="outline" className="rounded-full tabular-nums">{fmtInt(totalAttributed)} conversions</Badge>
+        </CardAction>
       </CardHeader>
-      <CardContent className="grid gap-5 p-4 lg:grid-cols-[220px_1fr] lg:p-5">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-1">
-          <div className="rounded-xl border bg-muted/25 p-4">
-            <p className="text-[11px] text-muted-foreground">Attributed conversions</p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">{fmtInt(totalAttributed)}</p>
-          </div>
-          <div className="rounded-xl border bg-muted/25 p-4">
-            <p className="text-[11px] text-muted-foreground">Market coverage</p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">{countryRows.length}</p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              {fmtInt(affiliatesWithMarket)} of {fmtInt(affiliates.length)} affiliates
-            </p>
-          </div>
-        </div>
-        <div>
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold">Top conversion markets</h2>
-              <p className="text-[11px] text-muted-foreground">Ranked by converted Rewardful referrals in this window.</p>
-            </div>
-            <Badge variant="outline">Page {activePage} of {totalPages}</Badge>
-          </div>
-          {countryRows.length === 0 ? (
-            <div className="rounded-xl border border-dashed p-8 text-center">
-              <p className="text-sm font-medium">No country-attributed conversions</p>
-              <p className="mt-1 text-xs text-muted-foreground">PostHog country enrichment has not populated this window.</p>
-            </div>
-          ) : (
-            <div className="grid gap-2">
-              {visibleCountries.map((country) => (
-                <div key={country.code} className="grid grid-cols-[minmax(110px,180px)_1fr_auto] items-center gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-medium">{country.name}</p>
+      <CardContent className="grid gap-3">
+        {countryRows.length === 0 ? (
+          <p className="text-muted-foreground text-xs">No country-attributed conversions in this window.</p>
+        ) : (
+          <>
+            {visible.map((country) => (
+              <div key={country.code} className="flex items-center">
+                <span className="text-2xl">{flagEmoji(country.code)}</span>
+                <div className="ml-4 min-w-0 flex-1 space-y-1">
+                  <div className="flex items-baseline gap-2">
+                    <p className="truncate text-sm leading-none font-medium">{country.name}</p>
                     <p className="text-[10px] text-muted-foreground">
-                      {country.affiliateIds.size} affiliates · {country.highRiskIds.size} high risk
+                      {country.affiliateIds.size} affiliates{country.highRiskIds.size > 0 ? ` · ${country.highRiskIds.size} high risk` : ''}
                     </p>
                   </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className={cn(
-                        'h-full rounded-full',
-                        country.highRiskIds.size > 0 ? 'bg-red-500' : 'bg-emerald-500',
-                      )}
-                      style={{ width: `${Math.max(3, (country.conversions / maxConversions) * 100)}%` }}
-                    />
-                  </div>
-                  <span className="text-xs font-semibold tabular-nums">{fmtInt(country.conversions)}</span>
+                  <Progress value={totalAttributed ? (country.conversions / totalAttributed) * 100 : 0} className="h-1" />
                 </div>
-              ))}
-            </div>
-          )}
-          <PaginationControls
-            page={activePage}
-            totalPages={totalPages}
-            totalItems={countryRows.length}
-            pageSize={pageSize}
-            itemLabel="markets"
-            onPageChange={setPage}
-          />
-        </div>
+                <div className="ms-auto pl-4 text-sm font-medium tabular-nums">{fmtInt(country.conversions)}</div>
+              </div>
+            ))}
+            {countryRows.length > 5 && (
+              <ShowMoreToggle expanded={expanded} hidden={countryRows.length - 5} onToggle={() => setExpanded((value) => !value)} />
+            )}
+          </>
+        )}
       </CardContent>
     </Card>
   );
@@ -923,8 +791,7 @@ function KeywordEvidenceSection({
   affiliates: WarAffiliate[];
   onOpenAffiliate: (id: string) => void;
 }) {
-  const [page, setPage] = useState(1);
-  const pageSize = 8;
+  const [expanded, setExpanded] = useState(false);
   const evidence = useMemo(() => affiliates
     .filter((affiliate) => affiliate.observedAdTerms.length > 0)
     .map((affiliate) => ({
@@ -935,104 +802,138 @@ function KeywordEvidenceSection({
     .sort((a, b) => b.brandMatches.length - a.brandMatches.length || b.observations - a.observations),
   [affiliates]);
   const brandMatches = evidence.reduce((sum, item) => sum + item.brandMatches.length, 0);
-  const totalPages = Math.max(1, Math.ceil(evidence.length / pageSize));
-  const activePage = Math.min(page, totalPages);
-  const visibleEvidence = evidence.slice((activePage - 1) * pageSize, activePage * pageSize);
+  const visible = expanded ? evidence : evidence.slice(0, 5);
 
   return (
-    <Card className="gap-0 overflow-hidden py-0">
-      <CardHeader className="border-b py-5">
+    <Card className="h-full gap-4 lg:col-span-6">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <KeyRound className="size-4" />
+          Keyword & campaign evidence
+        </CardTitle>
+        <CardDescription className="text-xs">
+          UTM keyword values captured on affiliate traffic — a Runable brand match means they likely bid on our name; confirm with a live SERP capture.
+        </CardDescription>
+        <CardAction>
+          <Badge variant="outline" className={cn('rounded-full tabular-nums', brandMatches > 0 && bandBadge('high'))}>
+            {fmtInt(brandMatches)} brand matches
+          </Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="grid gap-2">
+        {evidence.length === 0 ? (
+          <p className="text-muted-foreground text-xs">
+            No keyword or campaign terms captured in this window — capture a live SERP before treating brand bidding as proven.
+          </p>
+        ) : (
+          <>
+            {visible.map(({ affiliate, observations, brandMatches: matches }) => (
+              <button
+                key={affiliate.id}
+                type="button"
+                onClick={() => onOpenAffiliate(affiliate.id)}
+                className="flex min-w-0 items-center gap-3 rounded-lg p-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className={cn(
+                  'flex size-9 shrink-0 items-center justify-center rounded-lg',
+                  matches.length > 0
+                    ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
+                    : 'bg-muted text-muted-foreground',
+                )}>
+                  <KeyRound className="size-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-semibold">{affiliate.name}</p>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">
+                    {observations} observations · {affiliate.observedAdTerms.length} unique values
+                  </p>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn('rounded-full text-[10px]', matches.length > 0 ? bandBadge('high') : bandBadge('low'))}
+                >
+                  {matches.length > 0 ? 'brand match' : 'captured'}
+                </Badge>
+              </button>
+            ))}
+            {evidence.length > 5 && (
+              <ShowMoreToggle expanded={expanded} hidden={evidence.length - 5} onToggle={() => setExpanded((value) => !value)} />
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ---------- Dub verdicts ---------- */
+
+function DubVerdictsCard({ affiliates, onOpenAffiliate }: {
+  affiliates: WarAffiliate[];
+  onOpenAffiliate: (id: string) => void;
+}) {
+  const flagged = useMemo(() => affiliates
+    .filter((a) => dubTags(a).length > 0)
+    .sort((a, b) => b.unpaidCommissionCents - a.unpaidCommissionCents), [affiliates]);
+  if (flagged.length === 0) return null;
+  const exposure = flagged.reduce((sum, a) => sum + a.unpaidCommissionCents, 0);
+  return (
+    <Card className="gap-0 overflow-hidden border-red-300 bg-linear-to-tr from-red-200/30 to-red-100/30 py-0 shadow-none dark:border-red-950 dark:from-red-950/30 dark:to-red-900/30">
+      <CardHeader className="border-b py-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
-              <KeyRound className="size-4" />
-              Keyword & campaign evidence
+              <ShieldAlert className="size-4 text-red-600 dark:text-red-400" />
+              Dub verdicts — partners Dub itself flagged
             </CardTitle>
             <CardDescription className="mt-1 max-w-2xl text-xs">
-              Observed UTM values are evidence. A token name or paid-click parameter is only a proxy until a live
-              country/device search result or Ads Transparency record confirms the ad.
+              Bans, deactivations, and fraud tags issued by Dub and synced into our fraud tags.
+              These are near-certain verdicts — review and enforce these first.
             </CardDescription>
           </div>
-          <Button asChild size="sm" variant="outline">
-            <a href="https://adstransparency.google.com/" target="_blank" rel="noreferrer">
-              <ExternalLink className="size-3.5" />
-              Open Ads Transparency
-            </a>
-          </Button>
+          <Badge variant="destructive" className="rounded-full tabular-nums">
+            {flagged.length} partner{flagged.length === 1 ? '' : 's'} · {fmtUsd(exposure)} unpaid
+          </Badge>
         </div>
       </CardHeader>
-      <CardContent className="grid gap-5 p-4 lg:grid-cols-[260px_1fr] lg:p-5">
-        <div className="grid gap-3">
-          <div className="rounded-xl border bg-muted/25 p-4">
-            <p className="text-[11px] text-muted-foreground">Affiliates with captured terms</p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">{evidence.length}</p>
-          </div>
-          <div className={cn(
-            'rounded-xl border p-4',
-            brandMatches > 0
-              ? 'border-red-200 bg-red-50/70 dark:border-red-500/30 dark:bg-red-500/10'
-              : 'bg-muted/25',
-          )}>
-            <p className="text-[11px] text-muted-foreground">Direct Runable brand matches</p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">{brandMatches}</p>
-            <p className="mt-1 text-[11px] text-muted-foreground">Across captured utm_term / utm_campaign values</p>
-          </div>
-        </div>
-        <div>
-          <div className="mb-3">
-            <h2 className="text-sm font-semibold">Observed evidence by affiliate</h2>
-            <p className="text-[11px] text-muted-foreground">Open a case to inspect every captured value and its referral count.</p>
-          </div>
-          {evidence.length === 0 ? (
-            <div className="rounded-xl border border-dashed p-6">
-              <div className="flex items-start gap-3">
-                <FileSearch className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                <div>
-                  <p className="text-sm font-medium">No direct keyword values captured</p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    Paid-click and campaign-overlap signals remain useful for triage, but the exact searched keyword
-                    cannot be reconstructed. Capture a live SERP by country, device, time, and query before enforcement.
-                  </p>
-                </div>
+      <CardContent className="p-0">
+        <ExpandableRows
+          items={flagged}
+          preview={6}
+          perPage={12}
+          label="flagged partners"
+          render={(tiles) => (
+            <div className="grid gap-2 p-4 sm:grid-cols-2 xl:grid-cols-3">
+              {tiles.map((a) => (
+          <button
+            key={a.id}
+            type="button"
+            onClick={() => onOpenAffiliate(a.id)}
+            className="flex min-w-0 items-center gap-3 rounded-xl border bg-card p-3 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300">
+              <Ban className="size-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <p className="truncate text-xs font-semibold">{a.name}</p>
+                <SourceBadge source={a.source} />
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {dubTags(a).map((tag) => (
+                  <Badge key={tag} variant="outline" className={DUB_TAG_BADGE}>{tag}</Badge>
+                ))}
               </div>
             </div>
-          ) : (
-            <div className="grid gap-2 sm:grid-cols-2">
-              {visibleEvidence.map(({ affiliate, observations, brandMatches: matches }) => (
-                <button
-                  key={affiliate.id}
-                  type="button"
-                  onClick={() => onOpenAffiliate(affiliate.id)}
-                  className="flex min-w-0 items-center gap-3 rounded-xl border bg-card p-3 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <div className={cn(
-                    'flex size-9 shrink-0 items-center justify-center rounded-lg',
-                    matches.length > 0
-                      ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
-                      : 'bg-muted text-muted-foreground',
-                  )}>
-                    <KeyRound className="size-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-semibold">{affiliate.name}</p>
-                    <p className="mt-0.5 text-[10px] text-muted-foreground">
-                      {observations} observations · {affiliate.observedAdTerms.length} unique values
-                    </p>
-                  </div>
-                  {matches.length > 0 && <Badge variant="destructive" className="text-[10px]">brand</Badge>}
-                </button>
+            <div className="shrink-0 text-right">
+              <p className="text-xs font-semibold tabular-nums text-red-700 dark:text-red-300">{fmtUsd(a.unpaidCommissionCents)}</p>
+              <p className="text-[10px] text-muted-foreground">unpaid</p>
+            </div>
+          </button>
               ))}
             </div>
           )}
-          <PaginationControls
-            page={activePage}
-            totalPages={totalPages}
-            totalItems={evidence.length}
-            pageSize={pageSize}
-            itemLabel="affiliate evidence cases"
-            onPageChange={setPage}
-          />
-        </div>
+        />
       </CardContent>
     </Card>
   );
@@ -1040,7 +941,7 @@ function KeywordEvidenceSection({
 
 /* ---------- page ---------- */
 
-type Filter = 'all' | 'ads' | 'unpaid' | 'high' | 'medium' | 'hijack' | 'ring' | 'proposed' | 'banned';
+type Filter = 'all' | 'ads' | 'unpaid' | 'high' | 'medium' | 'hijack' | 'ring' | 'dub' | 'proposed' | 'banned';
 
 export default function WarRoomPage() {
   const { data, loading, days, reload } = useWarRoomWindow();
@@ -1050,7 +951,6 @@ export default function WarRoomPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<WarAffiliate | null>(null);
   const [busy, setBusy] = useState(false);
-  const [affiliatePage, setAffiliatePage] = useState(1);
 
   async function syncPosthog() {
     setSyncing(true);
@@ -1105,22 +1005,15 @@ export default function WarRoomPage() {
       if (filter === 'medium' && a.risk.band !== 'medium') return false;
       if (filter === 'hijack' && a.risk.stats.ourCampaignIds.length === 0) return false;
       if (filter === 'ring' && a.risk.stats.sharedCampaignIds.length === 0) return false;
+      if (filter === 'dub' && dubTags(a).length === 0) return false;
       if (filter === 'proposed' && a.enforcementState !== 'proposed_ban') return false;
       if (filter === 'banned' && a.enforcementState !== 'banned') return false;
       if (q && !a.name.toLowerCase().includes(q) && !(a.email ?? '').toLowerCase().includes(q)
         && !a.tokens.some(tk => tk.toLowerCase().includes(q))) return false;
       return true;
-    });
+    }).sort((a, b) =>
+      b.risk.score - a.risk.score || b.unpaidCommissionCents - a.unpaidCommissionCents);
   }, [data, filter, search]);
-
-  const affiliatePageSize = 10;
-  const affiliatePages = Math.max(1, Math.ceil(rows.length / affiliatePageSize));
-  const activeAffiliatePage = Math.min(affiliatePage, affiliatePages);
-  const pagedRows = rows.slice(
-    (activeAffiliatePage - 1) * affiliatePageSize,
-    activeAffiliatePage * affiliatePageSize,
-  );
-  const allSelected = pagedRows.length > 0 && pagedRows.every(r => selected.has(r.id));
 
   if (loading && !data) {
     return (
@@ -1151,32 +1044,28 @@ export default function WarRoomPage() {
   const selectFilter = (nextFilter: Filter) => {
     setFilter(nextFilter);
     setSelected(new Set());
-    setAffiliatePage(1);
   };
 
   return (
-    <div className="grid gap-5 p-4 md:gap-6 md:p-6">
+    <div className="@container/main mx-auto w-full max-w-[112rem] space-y-4 px-4 py-6 md:px-6">
       {open && <AffiliateSheet a={open} onClose={() => setOpen(null)} onAction={act} busy={busy} />}
 
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-row flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="mb-2 flex items-center gap-2">
-            <Badge variant="outline" className="gap-1 text-[10px]">
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold tracking-tight lg:text-2xl">Fraud War Room</h1>
+            <Badge variant="outline" className="gap-1 rounded-full text-[10px]">
               <ShieldCheck className="size-3" />
               Acquisition integrity
             </Badge>
-            <span className="text-[11px] text-muted-foreground">{data.window.days} day evidence window</span>
           </div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold">
-            <ShieldAlert className="size-6 text-red-500" />
-            Fraud War Room
-          </h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            PostHog first-touch evidence for paid acquisition, campaign overlap, downstream value, and commission exposure.
+          <p className="text-muted-foreground mt-0.5 max-w-3xl text-sm">
+            {data.window.days}-day evidence window · PostHog first-touch evidence for paid acquisition, campaign overlap, and commission exposure
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <PageControls />
           <Button size="sm" variant="outline" onClick={syncPosthog} disabled={syncing}>
             <RefreshCw className={cn('size-3.5', syncing && 'animate-spin')} />
             {syncing ? 'Syncing…' : 'Sync PostHog'}
@@ -1184,33 +1073,28 @@ export default function WarRoomPage() {
         </div>
       </div>
 
-      {/* KPI row */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi icon={Megaphone} label="Ad-driven signups" tone="danger"
-          value={`${Math.round(summary.adPct * 100)}%`}
-          sub={`${fmtInt(summary.adSignups)} of ${fmtInt(summary.totalSignups)} signups in ${data.window.days}d`}
-          onClick={() => selectFilter('ads')} active={filter === 'ads'} />
-        <Kpi icon={Users} label="Affiliates running ads" tone="warn"
-          value={fmtInt(summary.affiliatesRunningAds)}
-          sub={`${summary.highRisk} high risk · ${summary.mediumRisk} medium`}
-          onClick={() => selectFilter('ads')} active={filter === 'ads'} />
+      {/* KPI row — highest-value fraud intelligence first */}
+      <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi icon={DollarSign} label="Unpaid $ at risk" tone="danger"
           value={fmtUsd(summary.unpaidAtRiskCents)}
-          sub={`of ${fmtUsd(summary.unpaidTotalCents)} program-wide`}
+          sub={`held by high-risk affiliates · ${fmtUsd(summary.unpaidTotalCents)} unpaid program-wide`}
           onClick={() => selectFilter('unpaid')} active={filter === 'unpaid'} />
-        <Kpi icon={Crosshair} label="Our-campaign overlap"
-          value={fmtInt(summary.campaignHijackers)}
-          sub={`affiliate tokens seen with our campaign IDs · ${summary.ringMembers} in shared-ID clusters`}
-          onClick={() => selectFilter('hijack')} active={filter === 'hijack'} />
+        <Kpi icon={ShieldAlert} label="High-risk affiliates" tone="danger"
+          value={fmtInt(summary.highRisk)}
+          sub={`${summary.mediumRisk} medium · ${summary.proposedBans} proposed ban · ${summary.banned} banned`}
+          onClick={() => selectFilter('high')} active={filter === 'high'} />
+        <Kpi icon={Ban} label="Dub-flagged partners" tone="warn"
+          value={fmtInt(summary.dubFlagged)}
+          sub="banned / deactivated / fraud-tagged by Dub itself"
+          onClick={() => selectFilter('dub')} active={filter === 'dub'} />
+        <Kpi icon={Megaphone} label="Affiliates running paid ads" tone="warn"
+          value={fmtInt(summary.affiliatesRunningAds)}
+          sub={`${Math.round(summary.adPct * 100)}% of ${fmtInt(summary.totalSignups)} signups (${fmtInt(summary.adSignups)}) carried ad click params in ${data.window.days}d`}
+          onClick={() => selectFilter('ads')} active={filter === 'ads'} />
       </div>
 
-      <NetworkEvidenceCard counts={summary.networkSignups} />
-
-      {/* Hero chart + funnel */}
-      <div className="grid gap-4 xl:grid-cols-3">
-        <TrafficChartCard />
-        <ProgramFunnelCard />
-      </div>
+      {/* Dub's own fraud verdicts — near-certain cases */}
+      <DubVerdictsCard affiliates={data.affiliates} onOpenAffiliate={openAffiliateById} />
 
       {/* Filters + bulk actions */}
       <div className="flex flex-wrap items-center gap-2">
@@ -1223,6 +1107,7 @@ export default function WarRoomPage() {
               <TabsTrigger value="medium">Medium</TabsTrigger>
               <TabsTrigger value="hijack">Runable overlaps</TabsTrigger>
               <TabsTrigger value="ring">Shared IDs</TabsTrigger>
+              <TabsTrigger value="dub">Dub-flagged</TabsTrigger>
               <TabsTrigger value="proposed">Proposed</TabsTrigger>
               <TabsTrigger value="banned">Banned</TabsTrigger>
               <TabsTrigger value="all">All</TabsTrigger>
@@ -1238,10 +1123,7 @@ export default function WarRoomPage() {
         <div className="relative ml-auto w-full sm:w-72">
           <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
           <Input type="search" placeholder="Search name, email, token…" value={search}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setAffiliatePage(1);
-            }} className="h-9 w-full pl-8 text-xs" />
+            onChange={(event) => setSearch(event.target.value)} className="h-9 w-full pl-8 text-xs" />
         </div>
       </div>
 
@@ -1264,7 +1146,15 @@ export default function WarRoomPage() {
             </Button>
           </div>
         ) : (
-          <>
+          <ExpandableRows
+            key={`${filter}:${search}`}
+            items={rows}
+            preview={5}
+            perPage={10}
+            label="affiliate investigations"
+            render={(pagedRows) => {
+              const allSelected = pagedRows.length > 0 && pagedRows.every((r) => selected.has(r.id));
+              return (
             <div className="overflow-x-auto">
               <Table className="min-w-[920px]">
             <TableHeader>
@@ -1285,12 +1175,12 @@ export default function WarRoomPage() {
                 </TableHead>
                 <TableHead>Affiliate</TableHead>
                 <TableHead className="text-right">Risk</TableHead>
-                <TableHead className="hidden xl:table-cell">Signals</TableHead>
-                <TableHead className="hidden 2xl:table-cell">Markets</TableHead>
-                <TableHead className="text-right">Signups</TableHead>
-                <TableHead className="text-right">% Ads</TableHead>
-                <TableHead className="text-right">Paid (FTS)</TableHead>
+                <TableHead>Evidence</TableHead>
+                <TableHead className="text-right">Ad share</TableHead>
                 <TableHead className="text-right">Unpaid $</TableHead>
+                <TableHead className="hidden text-right xl:table-cell">Signups</TableHead>
+                <TableHead className="hidden text-right xl:table-cell">Paid (FTS)</TableHead>
+                <TableHead className="hidden max-w-[180px] 2xl:table-cell">Markets</TableHead>
                 <TableHead className="px-4">Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -1309,7 +1199,10 @@ export default function WarRoomPage() {
                     />
                   </TableCell>
                   <TableCell>
-                    <p className="font-medium">{a.name}</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="font-medium">{a.name}</p>
+                      <SourceBadge source={a.source} />
+                    </div>
                     <p className="text-muted-foreground text-xs">{a.email}</p>
                     <div className="mt-0.5 flex flex-wrap gap-1">
                       {a.tokens.slice(0, 3).map(t => (
@@ -1319,37 +1212,45 @@ export default function WarRoomPage() {
                     </div>
                   </TableCell>
                   <TableCell className="text-right">
-                    <Badge variant="outline" className={cn('font-bold tabular-nums', bandBadge(a.risk.band))}>{a.risk.score}</Badge>
+                    <div className="flex flex-col items-end gap-1.5">
+                      <Badge variant="outline" className={cn('font-bold tabular-nums', bandBadge(a.risk.band))}>{a.risk.score}</Badge>
+                      <Progress value={a.risk.score} className="h-1 w-16" />
+                    </div>
                   </TableCell>
-                  <TableCell className="hidden xl:table-cell">
-                    <div className="flex max-w-[260px] flex-wrap gap-1">
+                  <TableCell>
+                    <div className="flex max-w-[280px] flex-wrap gap-1">
+                      {dubTags(a).map((tag) => (
+                        <Badge key={tag} variant="outline" className={DUB_TAG_BADGE}>{tag}</Badge>
+                      ))}
                       {a.risk.signals.slice(0, 3).map(s => (
                         <Tooltip key={s.key}>
                           <TooltipTrigger asChild>
-                            <Badge variant="secondary" className={cn('text-[10px]',
-                              s.severity === 'high' && 'bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300')}>
+                            <Badge variant="outline" className={cn('rounded-full text-[10px]',
+                              s.severity === 'high'
+                                ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-300'
+                                : 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300')}>
                               {s.label}
                             </Badge>
                           </TooltipTrigger>
                           <TooltipContent className="max-w-xs">{s.detail}</TooltipContent>
                         </Tooltip>
                       ))}
-                      {a.risk.signals.length === 0 && <span className="text-muted-foreground text-xs">—</span>}
+                      {a.risk.signals.length === 0 && dubTags(a).length === 0 && <span className="text-muted-foreground text-xs">—</span>}
                     </div>
                   </TableCell>
-                  <TableCell className="hidden max-w-[180px] text-xs 2xl:table-cell">
-                    {a.countries.slice(0, 2).map((country) => country.name).join(', ') || <span className="text-muted-foreground">Unknown</span>}
-                    {a.countries.length > 2 && <span className="text-muted-foreground"> +{a.countries.length - 2}</span>}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtInt(a.risk.stats.signups)}</TableCell>
                   <TableCell className={cn('text-right font-medium tabular-nums',
                     a.risk.stats.adPct >= 0.9 ? 'text-red-600 dark:text-red-400'
                       : a.risk.stats.adPct >= 0.5 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground')}>
                     {a.risk.stats.signups > 0 ? `${Math.round(a.risk.stats.adPct * 100)}%` : '—'}
                   </TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">{fmtInt(a.risk.stats.fts)}</TableCell>
                   <TableCell className="text-right font-medium tabular-nums text-amber-600 dark:text-amber-400">
                     {fmtUsd(a.unpaidCommissionCents)}
+                  </TableCell>
+                  <TableCell className="hidden text-right tabular-nums xl:table-cell">{fmtInt(a.risk.stats.signups)}</TableCell>
+                  <TableCell className="hidden text-right font-medium tabular-nums xl:table-cell">{fmtInt(a.risk.stats.fts)}</TableCell>
+                  <TableCell className="hidden max-w-[180px] text-xs 2xl:table-cell">
+                    {a.countries.slice(0, 2).map((country) => country.name).join(', ') || <span className="text-muted-foreground">Unknown</span>}
+                    {a.countries.length > 2 && <span className="text-muted-foreground"> +{a.countries.length - 2}</span>}
                   </TableCell>
                   <TableCell className="px-4">
                     <Badge className={enforcementBadge(a.enforcementState)}>
@@ -1361,24 +1262,18 @@ export default function WarRoomPage() {
             </TableBody>
               </Table>
             </div>
-            <PaginationControls
-              page={activeAffiliatePage}
-              totalPages={affiliatePages}
-              totalItems={rows.length}
-              pageSize={affiliatePageSize}
-              itemLabel="affiliate investigations"
-              onPageChange={setAffiliatePage}
-            />
-          </>
+              );
+            }}
+          />
         )}
       </Card>
 
-      {/* Campaign overlap */}
-      {data.campaignOverlap.length > 0 && (
+      {/* Evidence overview — below the review queue */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+        <TrafficChartCard />
+        <ProgramFunnelCard />
+        <NetworkEvidenceCard counts={summary.networkSignups} />
         <CampaignOverlapSection items={data.campaignOverlap} onOpenAffiliate={openAffiliateById} />
-      )}
-
-      <div className="grid gap-5 xl:grid-cols-2">
         <CountryIntelligenceSection affiliates={data.affiliates} />
         <KeywordEvidenceSection affiliates={data.affiliates} onOpenAffiliate={openAffiliateById} />
       </div>

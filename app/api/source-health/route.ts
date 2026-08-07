@@ -23,7 +23,9 @@ export async function GET(req: Request) {
        WHERE campaign_id = ${campaignId}
          AND segment = 'risk_review_high'
          AND sync_status <> 'suppressed') AS high_risk,
-      (SELECT COUNT(*)::int FROM commission_holds WHERE status = 'held') AS held_count
+      (SELECT COUNT(*)::int FROM commission_holds WHERE status = 'held') AS held_count,
+      (SELECT MAX(updated_at) FROM affiliates WHERE source = 'dub') AS dub_synced_at,
+      (SELECT COUNT(*)::int FROM affiliates WHERE source = 'dub' AND status <> 'deleted') AS dub_rows
   `;
 
   const sourceReferralEvents = Number(row?.source_referrals ?? 0);
@@ -59,8 +61,13 @@ export async function GET(req: Request) {
       state: posthogAgeHours !== null && posthogAgeHours <= 48 ? 'healthy' : 'stale',
       lastSyncedAt: posthogSyncedAt,
     },
-    instantly: {
-      state: process.env.INSTANTLY_API_KEY ? 'configured' : 'missing',
+    dub: {
+      state: (() => {
+        const dubAge = ageHours(row?.dub_synced_at ? String(row.dub_synced_at) : null);
+        return dubAge !== null && dubAge <= 2 && Number(row?.dub_rows ?? 0) > 0 ? 'healthy' : 'stale';
+      })(),
+      lastSyncedAt: row?.dub_synced_at ? String(row.dub_synced_at) : null,
+      partnerRows: Number(row?.dub_rows ?? 0),
     },
     badges: {
       highRisk: Number(row?.high_risk ?? 0),

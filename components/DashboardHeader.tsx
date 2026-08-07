@@ -12,15 +12,15 @@ import { SidebarTrigger } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 const PAGE_META: Record<string, { label: string; source: string }> = {
-  '/': { label: 'Program overview', source: 'Rewardful + PostHog intelligence' },
-  '/monthly': { label: 'Monthly performance', source: 'Rewardful + PostHog intelligence' },
-  '/affiliates': { label: 'Affiliate directory', source: 'Rewardful + PostHog intelligence' },
-  '/countries': { label: 'Geography', source: 'Rewardful + PostHog intelligence' },
-  '/leaderboard': { label: 'Leaderboard', source: 'Rewardful + PostHog intelligence' },
-  '/funnel': { label: 'Funnel intelligence', source: 'Rewardful + PostHog intelligence' },
-  '/growth': { label: 'Affiliate growth', source: 'Rewardful + PostHog intelligence' },
+  '/': { label: 'Program overview', source: 'Rewardful + Dub + PostHog intelligence' },
+  '/monthly': { label: 'Monthly performance', source: 'Rewardful + Dub + PostHog intelligence' },
+  '/affiliates': { label: 'Affiliate directory', source: 'Rewardful + Dub + PostHog intelligence' },
+  '/countries': { label: 'Geography', source: 'Rewardful + Dub + PostHog intelligence' },
+  '/leaderboard': { label: 'Leaderboard', source: 'Rewardful + Dub + PostHog intelligence' },
+  '/funnel': { label: 'Funnel intelligence', source: 'Rewardful + Dub + PostHog intelligence' },
+  '/growth': { label: 'Affiliate growth', source: 'Rewardful + Dub + PostHog intelligence' },
   '/mail': { label: 'Mail Center', source: 'Rewardful + Instantly' },
-  '/warroom': { label: 'Fraud war room', source: 'Rewardful + PostHog intelligence' },
+  '/warroom': { label: 'Fraud war room', source: 'Rewardful + Dub + PostHog intelligence' },
   '/payouts': { label: 'Payout review', source: 'Rewardful operations' },
   '/enforcement': { label: 'Enforcement', source: 'Rewardful operations' },
 };
@@ -30,7 +30,7 @@ export function DashboardHeader() {
   const { range, setRange, refresh, syncing, syncRewardful } = useDashboardRange();
   const meta = PAGE_META[pathname] ?? {
     label: 'Affiliate operations',
-    source: 'Rewardful + PostHog intelligence',
+    source: 'Rewardful + Dub + PostHog intelligence',
   };
 
   return (
@@ -57,7 +57,7 @@ export function DashboardHeader() {
         <TooltipTrigger asChild>
           <Button type="button" size="sm" onClick={syncRewardful} disabled={syncing}>
             <DatabaseZap className={syncing ? 'size-3.5 animate-pulse' : 'size-3.5'} />
-            <span className="hidden xl:inline">{syncing ? 'Syncing…' : 'Sync Rewardful'}</span>
+            <span className="hidden xl:inline">{syncing ? 'Syncing…' : 'Sync all sources'}</span>
           </Button>
         </TooltipTrigger>
         <TooltipContent>Pull source changes, then refresh dashboard data</TooltipContent>

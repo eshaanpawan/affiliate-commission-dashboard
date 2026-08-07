@@ -18,6 +18,7 @@ interface WarRoomAffiliate {
   id: string;
   name: string;
   email: string | null;
+  source: string;
   rewardfulStatus: string;
   reviewStatus: string;
   enforcementState: string;
@@ -81,7 +82,7 @@ export async function GET(req: Request) {
       ORDER BY link_token, created_at ASC
     `),
     db.execute(sql`
-      SELECT rewardful_id, first_name, last_name, email, status, review_status,
+      SELECT rewardful_id, first_name, last_name, email, COALESCE(source, 'rewardful') AS source, status, review_status,
         enforcement_state, COALESCE(fraud_tags, '[]'::jsonb) AS fraud_tags,
         unpaid_commission_cents, paid_commission_cents, conversions, visitors
       FROM affiliates WHERE status <> 'deleted'
@@ -213,6 +214,7 @@ export async function GET(req: Request) {
       id,
       name: [r.first_name, r.last_name].filter(Boolean).join(' ') || '(unnamed)',
       email: (r.email as string) ?? null,
+      source: String(r.source ?? 'rewardful'),
       rewardfulStatus: String(r.status),
       reviewStatus: String(r.review_status ?? 'unreviewed'),
       enforcementState: String(r.enforcement_state ?? 'none'),
@@ -288,6 +290,7 @@ export async function GET(req: Request) {
       unpaidTotalCents: affiliates.reduce((s, a) => s + a.unpaidCommissionCents, 0),
       proposedBans: affiliates.filter(a => a.enforcementState === 'proposed_ban').length,
       banned: affiliates.filter(a => a.enforcementState === 'banned').length,
+      dubFlagged: affiliates.filter(a => a.fraudTags.some(t => t.startsWith('dub:'))).length,
     },
     daily: (dailyRows.rows as Record<string, unknown>[]).map(r => ({
       day: String(r.day),
@@ -297,7 +300,10 @@ export async function GET(req: Request) {
       fts: Number(r.fts),
       pageviews: Number(r.pageviews),
     })),
-    affiliates: affiliates.filter(a => a.tokens.length > 0 || a.unpaidCommissionCents > 0),
+    affiliates: affiliates.filter(a =>
+      a.tokens.length > 0
+      || a.unpaidCommissionCents > 0
+      || a.fraudTags.some(t => t.startsWith('dub:'))),
     campaignOverlap,
   });
 }

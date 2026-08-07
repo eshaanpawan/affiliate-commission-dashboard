@@ -22,7 +22,7 @@ export async function proxy(request: NextRequest) {
 
   // Machine-to-machine: cron jobs call the source sync handlers with a bearer
   // token. Pass those requests through; each handler validates CRON_SECRET.
-  if ((pathname === '/api/sync' || pathname === '/api/sync/posthog') && request.headers.get('authorization')) {
+  if ((pathname === '/api/sync' || pathname === '/api/sync/posthog' || pathname === '/api/affiliates/tts') && request.headers.get('authorization')) {
     return NextResponse.next();
   }
 

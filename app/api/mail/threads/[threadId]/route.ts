@@ -4,7 +4,7 @@ import {
   getInstantlyCampaignId,
   listEmailsPage,
 } from '@/lib/instantly';
-import { isUuid, mailJson, mailRouteError, requireMailAuth } from '../../_shared';
+import { isThreadId, mailJson, mailRouteError, requireMailAuth } from '../../_shared';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,7 +13,7 @@ export async function GET(req: Request, context: { params: Promise<{ threadId: s
   if (unauthorized) return unauthorized;
 
   const { threadId } = await context.params;
-  if (!isUuid(threadId)) return mailJson({ error: 'Invalid thread ID' }, 400);
+  if (!isThreadId(threadId)) return mailJson({ error: 'Invalid thread ID' }, 400);
 
   try {
     const campaignId = getInstantlyCampaignId();

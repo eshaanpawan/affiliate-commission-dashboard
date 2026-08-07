@@ -1,12 +1,12 @@
 import { getInstantlyCampaignId, listEmailsPage, markThreadRead } from '@/lib/instantly';
-import { isUuid, mailJson, mailRouteError, requireMailAuth } from '../../../_shared';
+import { isThreadId, mailJson, mailRouteError, requireMailAuth } from '../../../_shared';
 
 export async function POST(req: Request, context: { params: Promise<{ threadId: string }> }) {
   const unauthorized = await requireMailAuth(req);
   if (unauthorized) return unauthorized;
 
   const { threadId } = await context.params;
-  if (!isUuid(threadId)) return mailJson({ error: 'Invalid thread ID' }, 400);
+  if (!isThreadId(threadId)) return mailJson({ error: 'Invalid thread ID' }, 400);
 
   try {
     const campaignId = getInstantlyCampaignId();

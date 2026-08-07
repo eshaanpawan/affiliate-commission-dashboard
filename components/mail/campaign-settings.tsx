@@ -3,7 +3,7 @@
 import * as React from 'react';
 import {
   CalendarClock,
-  Check,
+
   Clock3,
   Gauge,
   LoaderCircle,
@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   ShieldOff,
   Users,
+  Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -241,6 +242,26 @@ export function CampaignSettings({ campaign, accounts, onSaved, className }: Cam
   const [savedSnapshot, setSavedSnapshot] = React.useState(() => JSON.stringify(initial));
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [sendNowBusy, setSendNowBusy] = React.useState(false);
+
+  const sendRightNow = async () => {
+    setSendNowBusy(true);
+    try {
+      const response = await fetch('/api/mail/campaign/launch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true, action: 'send-now' }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error ?? `Request failed (${response.status})`);
+      toast.success('Schedule opened — all days, 00:00–23:59. If the campaign is active, delivery starts within minutes.');
+      await onSaved?.();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not open the schedule.');
+    } finally {
+      setSendNowBusy(false);
+    }
+  };
 
   React.useEffect(() => {
     setForm(initial);
@@ -336,16 +357,16 @@ export function CampaignSettings({ campaign, accounts, onSaved, className }: Cam
   return (
     <>
       <Card className={cn('gap-0 overflow-hidden py-0', className)}>
-        <CardHeader className="border-b bg-muted/10 py-5">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 border-b bg-muted/10 py-4">
           <div className="min-w-0">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle>Campaign controls</CardTitle>
               <Badge variant={state.safe ? 'secondary' : 'destructive'}><ShieldCheck /> {state.label}</Badge>
               {dirty && <Badge variant="destructive">Unsaved</Badge>}
             </div>
-            <CardTitle>Campaign controls</CardTitle>
             <CardDescription className="mt-1">{campaign.name || 'Affiliate outreach'}</CardDescription>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex shrink-0 gap-2">
             <Button variant="outline" size="sm" onClick={reset} disabled={!dirty || saving}>Reset</Button>
             <Button size="sm" onClick={reviewSave} disabled={!canSave}>{saving ? <LoaderCircle className="animate-spin" /> : <Save />}{saving ? 'Saving…' : 'Review & save'}</Button>
           </div>
@@ -359,14 +380,14 @@ export function CampaignSettings({ campaign, accounts, onSaved, className }: Cam
                   <div><h3 className="flex items-center gap-2 text-sm font-semibold"><Users className="size-4" /> Healthy senders</h3><p className="text-muted-foreground mt-1 text-xs">30 emails/day per selected account</p></div>
                   <div className="flex gap-2"><Button size="sm" variant="outline" onClick={selectAllHealthy}>Select all</Button><Button size="sm" variant="ghost" onClick={() => setField('emailList', [])}>Clear</Button></div>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-1.5 sm:grid-cols-2">
                   {healthy.map((account) => {
                     const selected = selectedSet.has(account.email.toLowerCase());
                     return (
-                      <label key={account.email} className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors hover:bg-muted/30', selected && 'border-foreground/25 bg-muted/20')}>
+                      <label key={account.email} className={cn('flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors hover:bg-muted/30', selected && 'border-foreground/25 bg-muted/20')}>
                         <Checkbox checked={selected} onCheckedChange={(checked) => toggleSender(account.email.toLowerCase(), checked === true)} />
-                        <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{account.email}</span><span className="text-muted-foreground mt-1 flex items-center gap-2 text-[10px]"><span className="text-emerald-600">Ready</span><span>Warmup {account.warmupScore ?? '—'}%</span></span></span>
-                        {selected && <Check className="size-3.5 text-emerald-600" />}
+                        <span className="min-w-0 flex-1 truncate text-xs font-medium">{account.email}</span>
+                        <span className="text-muted-foreground shrink-0 text-[10px] tabular-nums">{account.warmupScore ?? '—'}%</span>
                       </label>
                     );
                   })}
@@ -374,27 +395,32 @@ export function CampaignSettings({ campaign, accounts, onSaved, className }: Cam
                 {healthy.length === 0 && <p className="text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm">No healthy approved senders are connected.</p>}
               </section>
 
-              <section className="grid gap-5 border-b p-4 md:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)] md:p-5">
-                <div>
+              <section className="border-b p-4 md:p-5">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="flex items-center gap-2 text-sm font-semibold"><Gauge className="size-4" /> Volume</h3>
-                  <div className="mt-4 grid grid-cols-2 gap-2">
-                    <div className="rounded-lg border bg-muted/15 p-3"><p className="text-muted-foreground text-[10px] uppercase tracking-wide">Selected</p><p className="mt-1 text-xl font-semibold tabular-nums">{form.emailList.length}</p></div>
-                    <div className="rounded-lg border bg-muted/15 p-3"><p className="text-muted-foreground text-[10px] uppercase tracking-wide">Capacity</p><p className="mt-1 text-xl font-semibold tabular-nums">{capacity}<span className="text-muted-foreground text-xs font-normal">/day</span></p></div>
-                  </div>
+                  <p className="text-muted-foreground text-xs"><span className="text-foreground font-medium tabular-nums">{form.emailList.length}</span> senders · capacity <span className="text-foreground font-medium tabular-nums">{capacity}</span>/day</p>
                 </div>
-                <div className="grid content-start gap-2">
-                  <NumberField id="daily-max" label="Campaign daily maximum" value={form.dailyMaxLeads} min={1} max={Math.max(1, capacity)} onChange={(value) => setField('dailyMaxLeads', value)} suffix={`of ${capacity}`} />
-                  {form.dailyMaxLeads > capacity && <p className="text-destructive text-[11px]">Maximum cannot exceed selected sender capacity.</p>}
-                </div>
+                <NumberField id="daily-max" label="Campaign daily maximum" value={form.dailyMaxLeads} min={1} max={Math.max(1, capacity)} onChange={(value) => setField('dailyMaxLeads', value)} suffix={`of ${capacity}`} />
+                {form.dailyMaxLeads > capacity && <p className="text-destructive mt-1.5 text-[11px]">Maximum cannot exceed selected sender capacity.</p>}
               </section>
 
               <section className="p-4 md:p-5">
-                <div className="mb-4"><h3 className="flex items-center gap-2 text-sm font-semibold"><CalendarClock className="size-4" /> Sending schedule</h3></div>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="grid gap-1.5 sm:col-span-3"><Label className="text-xs">Timezone</Label><Select value={form.timezone} onValueChange={(value) => setField('timezone', value)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{TIMEZONES.map((timezone) => <SelectItem key={timezone} value={timezone}>{timezone.replaceAll('_', ' ')}</SelectItem>)}</SelectContent></Select></div>
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="flex items-center gap-2 text-sm font-semibold"><CalendarClock className="size-4" /> Sending schedule</h3>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={sendNowBusy}
+                    onClick={() => void sendRightNow()}
+                    title="Opens the schedule to all days, 00:00–23:59 so delivery starts immediately"
+                  >
+                    {sendNowBusy ? <LoaderCircle className="animate-spin" /> : <Zap />} {sendNowBusy ? 'Opening…' : 'Send right now'}
+                  </Button>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-1.5 sm:col-span-2"><Label className="text-xs">Timezone</Label><Select value={form.timezone} onValueChange={(value) => setField('timezone', value)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent>{TIMEZONES.map((timezone) => <SelectItem key={timezone} value={timezone}>{timezone.replaceAll('_', ' ')}</SelectItem>)}</SelectContent></Select></div>
                   <div className="grid gap-1.5"><Label htmlFor="schedule-from" className="text-xs">From</Label><Input id="schedule-from" type="time" value={form.from} onChange={(event) => setField('from', event.target.value)} /></div>
                   <div className="grid gap-1.5"><Label htmlFor="schedule-to" className="text-xs">To</Label><Input id="schedule-to" type="time" value={form.to} onChange={(event) => setField('to', event.target.value)} /></div>
-                  <div className="grid gap-1.5"><Label className="text-xs">Active days</Label><p className="text-muted-foreground h-8 content-center text-xs">{Object.values(form.days).filter(Boolean).length} selected</p></div>
                 </div>
                 <div className="mt-3 grid grid-cols-7 gap-1">
                   {DAY_OPTIONS.map(([key, label]) => <Button key={key} type="button" size="sm" variant={form.days[key] ? 'default' : 'outline'} aria-pressed={form.days[key]} onClick={() => setField('days', { ...form.days, [key]: !form.days[key] })} className="px-1">{label}</Button>)}

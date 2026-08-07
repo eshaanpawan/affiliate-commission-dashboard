@@ -225,6 +225,14 @@ export async function POST(req: NextRequest) {
     )`);
   await run('idx_outreach_events_campaign', () => sql`CREATE INDEX IF NOT EXISTS idx_outreach_events_campaign ON outreach_events (campaign_id)`);
   await run('idx_outreach_events_created_at', () => sql`CREATE INDEX IF NOT EXISTS idx_outreach_events_created_at ON outreach_events (created_at)`);
+  await run('mail_drafts table', () => sql`
+    CREATE TABLE IF NOT EXISTS mail_drafts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL UNIQUE,
+      steps JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
 
   // NOTE: migrate.ts also has an `UPDATE commissions ... FROM sales` data-repair
   // statement. It is intentionally NOT mirrored here — commissions.sale_id is NULL

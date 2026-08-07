@@ -6,7 +6,6 @@ import {
   ArrowUpRight,
   BarChart3,
   CheckCircle2,
-  ChevronLeft,
   ChevronRight,
   Copy,
   Download,
@@ -14,16 +13,15 @@ import {
   Rocket,
   Search,
   ShieldAlert,
-  Sparkles,
   Sprout,
   Target,
   Users,
-  Zap,
 } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts';
 import { toast } from 'sonner';
 
 import { ChartRangeTabs } from '@/components/RangeTabs';
+import { ExpandableRows } from '@/components/ExpandableRows';
 import { useDashboardRange } from '@/components/DashboardRangeProvider';
 import { useDashboard, type Affiliate } from '@/lib/use-dashboard';
 import type { DashboardRange } from '@/lib/dashboard-range';
@@ -37,6 +35,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { PageControls } from '@/components/PageControls';
 
 type Segment = 'scale' | 'nurture' | 'activate' | 'review';
 type SortKey = 'priority' | 'revenue' | 'conversions' | 'traffic' | 'newest';
@@ -179,13 +178,11 @@ export default function GrowthPage() {
   const [segment, setSegment] = React.useState<Segment>('scale');
   const [search, setSearch] = React.useState('');
   const [sort, setSort] = React.useState<SortKey>('priority');
-  const [page, setPage] = React.useState(1);
-  const [pageSize, setPageSize] = React.useState(25);
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
 
   if (loading || !data) {
     return (
-      <div className="mx-auto grid w-full max-w-[112rem] gap-4 px-4 py-8">
+      <div className="mx-auto grid w-full max-w-[112rem] gap-4 px-4 py-6 md:px-6">
         <Skeleton className="h-12 w-96 max-w-full" />
         <div className="grid gap-4 lg:grid-cols-4"><Skeleton className="h-28 lg:col-span-1" /><Skeleton className="h-28 lg:col-span-1" /><Skeleton className="h-28 lg:col-span-1" /><Skeleton className="h-28 lg:col-span-1" /></div>
         <Skeleton className="h-80" />
@@ -217,17 +214,11 @@ export default function GrowthPage() {
       if (sort === 'newest') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       return affiliatePriority(b, segment) - affiliatePriority(a, segment);
     });
-  const pageCount = Math.max(1, Math.ceil(segmented.length / pageSize));
-  const activePage = Math.min(page, pageCount);
-  const visible = segmented.slice((activePage - 1) * pageSize, activePage * pageSize);
   const selected = data.affiliates.filter((affiliate) => selectedIds.has(affiliate.id));
-  const allVisibleSelected = visible.length > 0 && visible.every((affiliate) => selectedIds.has(affiliate.id));
-  const someVisibleSelected = visible.some((affiliate) => selectedIds.has(affiliate.id));
   const definition = segmentMeta[segment];
 
   const changeSegment = (next: Segment) => {
     setSegment(next);
-    setPage(1);
     setSelectedIds(new Set());
   };
 
@@ -276,7 +267,7 @@ export default function GrowthPage() {
     toast.success(`${rows.length} affiliate${rows.length === 1 ? '' : 's'} exported`);
   };
 
-  const toggleVisible = (checked: boolean) => {
+  const toggleVisible = (checked: boolean, visible: Affiliate[]) => {
     setSelectedIds((current) => {
       const next = new Set(current);
       for (const affiliate of visible) {
@@ -288,49 +279,42 @@ export default function GrowthPage() {
   };
 
   return (
-    <div className="mx-auto grid w-full max-w-[112rem] gap-6 px-4 py-8">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+    <div className="@container/main mx-auto w-full max-w-[112rem] space-y-4 px-4 py-6 md:px-6">
+      <div className="flex flex-row flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-muted-foreground mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]"><Zap className="size-3.5 text-emerald-500" /> Partner operations</p>
-          <h1 className="flex items-center gap-2 text-2xl font-bold"><Sparkles className="size-5" /> Affiliate Growth Workspace</h1>
-          <p className="text-muted-foreground mt-1 max-w-3xl text-sm">Decide who to grow, why they are prioritized, and which controlled action should happen next—all from live Rewardful and PostHog signals.</p>
+          <h1 className="text-xl font-bold tracking-tight lg:text-2xl">Affiliate Growth Workspace</h1>
+          <p className="text-muted-foreground mt-0.5 max-w-3xl text-sm">Decide who to grow, why they are prioritized, and which controlled action should happen next — all from live Rewardful and PostHog signals.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline"><Link href="/warroom"><ShieldAlert /> Review acquisition risk</Link></Button>
-          <Button asChild><Link href="/mail?tab=audience"><Mail /> Open outreach center</Link></Button>
+          <PageControls />
+          <Button asChild variant="outline" size="sm" className="text-destructive border-destructive/30 hover:bg-destructive/10"><Link href="/warroom"><ShieldAlert className="size-3.5" /> Review acquisition risk</Link></Button>
+          <Button asChild size="sm"><Link href="/mail?tab=audience"><Mail className="size-3.5" /> Open outreach center</Link></Button>
         </div>
       </div>
 
-      <section aria-label="Portfolio pulse" className="grid overflow-hidden rounded-2xl border bg-card sm:grid-cols-2 xl:grid-cols-4">
-        <div className="border-b p-5 sm:border-r xl:border-b-0">
-          <p className="text-muted-foreground flex items-center gap-2 text-xs"><Users className="size-3.5" /> Affiliates tracked</p>
-          <p className="mt-2 text-3xl font-semibold tabular-nums">{data.affiliates.length.toLocaleString()}</p>
-          <p className="text-muted-foreground mt-1 text-xs">{(counts.scale + counts.nurture).toLocaleString()} ready for growth work</p>
-        </div>
-        <div className="border-b p-5 xl:border-b-0 xl:border-r">
-          <p className="text-muted-foreground flex items-center gap-2 text-xs"><Rocket className="size-3.5 text-emerald-500" /> Scale revenue</p>
-          <p className="mt-2 text-3xl font-semibold tabular-nums">{fmtCents(scaleRevenue)}</p>
-          <p className="text-muted-foreground mt-1 text-xs">from {counts.scale.toLocaleString()} proven partners</p>
-        </div>
-        <div className="border-b p-5 sm:border-r sm:border-b-0">
-          <p className="text-muted-foreground flex items-center gap-2 text-xs"><BarChart3 className="size-3.5 text-sky-500" /> Portfolio conversion</p>
-          <p className="mt-2 text-3xl font-semibold tabular-nums">{pct(totalConversions, totalSignups)}</p>
-          <p className="text-muted-foreground mt-1 text-xs">{totalConversions.toLocaleString()} paid from {totalSignups.toLocaleString()} signups</p>
-        </div>
-        <div className="p-5">
-          <p className="text-muted-foreground flex items-center gap-2 text-xs"><ShieldAlert className="size-3.5 text-red-500" /> Review exposure</p>
-          <p className="mt-2 text-3xl font-semibold tabular-nums">{fmtCents(reviewCommission)}</p>
-          <p className="text-muted-foreground mt-1 text-xs">tracked commission across {counts.review.toLocaleString()} review cases</p>
-        </div>
+      <section aria-label="Portfolio pulse" className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          { icon: Users, iconCls: '', label: 'Affiliates tracked', value: data.affiliates.length.toLocaleString(), sub: `${(counts.scale + counts.nurture).toLocaleString()} ready for growth work` },
+          { icon: Rocket, iconCls: 'text-emerald-500', label: 'Scale revenue', value: fmtCents(scaleRevenue), sub: `from ${counts.scale.toLocaleString()} proven partners` },
+          { icon: BarChart3, iconCls: 'text-sky-500', label: 'Portfolio conversion', value: pct(totalConversions, totalSignups), sub: `${totalConversions.toLocaleString()} paid from ${totalSignups.toLocaleString()} signups` },
+          { icon: ShieldAlert, iconCls: 'text-red-500', label: 'Review exposure', value: fmtCents(reviewCommission), sub: `tracked commission across ${counts.review.toLocaleString()} review cases` },
+        ].map((stat) => (
+          <Card key={stat.label} className="w-full gap-0 p-6 py-4">
+            <CardContent className="p-0">
+              <dt className="text-muted-foreground flex items-center gap-2 text-sm font-medium"><stat.icon className={`size-3.5 ${stat.iconCls}`} /> {stat.label}</dt>
+              <dd className="text-foreground mt-2 text-3xl font-semibold tabular-nums">{stat.value}</dd>
+              <p className="text-muted-foreground mt-1 text-xs">{stat.sub}</p>
+            </CardContent>
+          </Card>
+        ))}
       </section>
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(20rem,0.8fr)]">
         <GrowthPipeline affiliates={data.affiliates} />
-        <Card className="border-foreground/10 bg-foreground text-background dark:bg-card dark:text-foreground">
+        <Card className="h-full">
           <CardHeader>
-            <p className="text-background/55 dark:text-muted-foreground text-[11px] font-semibold uppercase tracking-[0.16em]">Operating order</p>
-            <CardTitle className="text-lg">Move one queue at a time</CardTitle>
-            <CardDescription className="text-background/65 dark:text-muted-foreground">Risk review gates growth. Every outbound or account change still requires approval.</CardDescription>
+            <CardTitle>Move one queue at a time</CardTitle>
+            <CardDescription>Risk review gates growth. Every outbound or account change still requires approval.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2">
             {([
@@ -339,18 +323,18 @@ export default function GrowthPage() {
               ['03', 'Convert engaged traffic', counts.nurture, 'nurture'],
               ['04', 'Expand proven partners', counts.scale, 'scale'],
             ] as const).map(([order, title, count, key]) => (
-              <button key={key} type="button" onClick={() => changeSegment(key)} className="group flex items-center gap-3 rounded-xl border border-background/15 px-3 py-3 text-left transition-colors hover:bg-background/10 dark:border-border dark:hover:bg-muted/50">
-                <span className="text-background/45 dark:text-muted-foreground font-mono text-xs">{order}</span>
+              <button key={key} type="button" onClick={() => changeSegment(key)} className="group hover:bg-muted/50 flex items-center gap-3 rounded-md border px-3 py-3 text-left transition-colors">
+                <span className="bg-muted flex size-8 shrink-0 items-center justify-center rounded-md border font-mono text-xs">{order}</span>
                 <span className="min-w-0 flex-1 text-sm font-medium">{title}</span>
-                <span className="font-mono text-xs tabular-nums">{count.toLocaleString()}</span>
-                <ChevronRight className="size-4 opacity-45 transition-transform group-hover:translate-x-0.5" />
+                <Badge variant="outline" className="rounded-full tabular-nums">{count.toLocaleString()}</Badge>
+                <ChevronRight className="text-muted-foreground size-4 transition-transform group-hover:translate-x-0.5" />
               </button>
             ))}
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {(Object.keys(segmentMeta) as Segment[]).map((key) => {
           const meta = segmentMeta[key];
           return (
@@ -359,11 +343,11 @@ export default function GrowthPage() {
               type="button"
               aria-pressed={segment === key}
               onClick={() => changeSegment(key)}
-              className={`group relative overflow-hidden rounded-xl border bg-card p-4 text-left transition-all hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-sm ${segment === key ? 'ring-ring ring-2' : ''}`}
+              className={`bg-card group relative overflow-hidden rounded-xl border p-4 text-left transition-shadow hover:shadow-md ${segment === key ? 'ring-ring ring-2' : ''}`}
             >
               <span className={`absolute inset-y-0 left-0 w-1 ${meta.accent}`} />
-              <span className={`mb-3 flex size-9 items-center justify-center rounded-lg ${meta.tone}`}><meta.icon className="size-4" /></span>
-              <span className="block text-sm font-semibold">{meta.label} <span className="float-right tabular-nums">{counts[key].toLocaleString()}</span></span>
+              <span className={`mb-3 flex size-10 items-center justify-center rounded-md border ${meta.tone}`}><meta.icon className="size-4" /></span>
+              <span className="block text-sm font-semibold">{meta.label} <Badge variant="outline" className="float-right rounded-full tabular-nums">{counts[key].toLocaleString()}</Badge></span>
               <span className="text-muted-foreground mt-1 block text-xs leading-relaxed">{meta.description}</span>
             </button>
           );
@@ -373,7 +357,7 @@ export default function GrowthPage() {
       <Card className="gap-0 overflow-hidden py-0">
         <CardHeader className="border-b py-5">
           <div className="flex min-w-0 items-start gap-3">
-            <span className={`mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg ${definition.tone}`}><definition.icon className="size-4" /></span>
+            <span className={`mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-md border ${definition.tone}`}><definition.icon className="size-4" /></span>
             <div className="min-w-0">
               <CardTitle className="text-base">{definition.label} action queue</CardTitle>
               <CardDescription className="mt-1">{definition.rule}</CardDescription>
@@ -388,10 +372,10 @@ export default function GrowthPage() {
         <div className="flex flex-col gap-3 border-b bg-muted/25 px-5 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="relative w-full max-w-md">
             <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
-            <Input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} className="pl-8" placeholder="Search name, email, link token, or signal…" aria-label="Search the current action queue" />
+            <Input value={search} onChange={(event) => setSearch(event.target.value)} className="pl-8" placeholder="Search name, email, link token, or signal…" aria-label="Search the current action queue" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Select value={sort} onValueChange={(value) => { setSort(value as SortKey); setPage(1); }}>
+            <Select value={sort} onValueChange={(value) => setSort(value as SortKey)}>
               <SelectTrigger aria-label="Sort action queue"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="priority">Highest priority</SelectItem>
@@ -399,14 +383,6 @@ export default function GrowthPage() {
                 <SelectItem value="conversions">Most conversions</SelectItem>
                 <SelectItem value="traffic">Most traffic</SelectItem>
                 <SelectItem value="newest">Newest joined</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={String(pageSize)} onValueChange={(value) => { setPageSize(Number(value)); setPage(1); }}>
-              <SelectTrigger aria-label="Rows per page"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="10">10 rows</SelectItem>
-                <SelectItem value="25">25 rows</SelectItem>
-                <SelectItem value="50">50 rows</SelectItem>
               </SelectContent>
             </Select>
             <Button size="sm" variant="outline" disabled={segmented.length === 0} onClick={() => downloadQueue(segmented)}><Download /> Export queue</Button>
@@ -425,6 +401,10 @@ export default function GrowthPage() {
         )}
 
         <CardContent className="p-0">
+          <ExpandableRows items={segmented} preview={5} perPage={10} label={`${definition.label.toLowerCase()} affiliates`} render={(visible) => {
+          const allVisibleSelected = visible.length > 0 && visible.every((affiliate) => selectedIds.has(affiliate.id));
+          const someVisibleSelected = visible.some((affiliate) => selectedIds.has(affiliate.id));
+          return (
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
@@ -433,7 +413,7 @@ export default function GrowthPage() {
                     <Checkbox
                       aria-label="Select all affiliates on this page"
                       checked={allVisibleSelected ? true : someVisibleSelected ? 'indeterminate' : false}
-                      onCheckedChange={(checked) => toggleVisible(checked === true)}
+                      onCheckedChange={(checked) => toggleVisible(checked === true, visible)}
                     />
                   </TableHead>
                   <TableHead>Affiliate</TableHead>
@@ -472,7 +452,7 @@ export default function GrowthPage() {
                       <TableCell className="text-right tabular-nums">{affiliate.posthogPageviews.toLocaleString()}</TableCell>
                       <TableCell className="text-right tabular-nums">{affiliate.signups.toLocaleString()}</TableCell>
                       <TableCell className="text-right font-medium tabular-nums">{affiliate.conversions.toLocaleString()}</TableCell>
-                      <TableCell className="text-right"><Badge variant={isRiskyAdShare ? 'destructive' : 'secondary'}>{pct(affiliate.adDrivenSignups, affiliate.posthogSignups)}</Badge></TableCell>
+                      <TableCell className="text-right"><Badge variant="outline" className={`rounded-full text-xs font-medium tabular-nums ${isRiskyAdShare ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' : ''}`}>{pct(affiliate.adDrivenSignups, affiliate.posthogSignups)}</Badge></TableCell>
                       <TableCell className="text-right font-medium tabular-nums"><p>{fmtCents(affiliate.revenueCents)}</p><p className="text-muted-foreground mt-0.5 text-[10px]">{fmtCents(affiliate.commissionCents)} commission</p></TableCell>
                       <TableCell className="px-5"><div className="flex justify-end gap-1"><Button size="sm" variant="outline" onClick={() => copyBrief(affiliate)}><Copy className="size-3.5" /> Brief</Button><Button size="sm" asChild variant={segment === 'review' ? 'destructive' : 'default'}><Link href={segment === 'review' ? '/warroom' : `/mail?tab=audience&q=${encodeURIComponent(affiliate.email || affiliate.name)}`}>{segment === 'review' ? <ShieldAlert className="size-3.5" /> : <Mail className="size-3.5" />} {segment === 'review' ? 'Review' : 'Act'}</Link></Button></div></TableCell>
                     </TableRow>
@@ -481,17 +461,9 @@ export default function GrowthPage() {
               </TableBody>
             </Table>
           </div>
+          );
+          }} />
           {segmented.length === 0 && <div className="text-muted-foreground p-12 text-center text-sm">{search ? 'No affiliates in this queue match your search.' : `No affiliates currently meet the ${definition.label} rules.`}</div>}
-          {segmented.length > 0 && (
-            <div className="flex flex-col gap-3 border-t px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-muted-foreground text-xs">Showing {(activePage - 1) * pageSize + 1}–{Math.min(activePage * pageSize, segmented.length)} of {segmented.length.toLocaleString()} {definition.label.toLowerCase()} affiliates</p>
-              <div className="flex items-center gap-2 self-end sm:self-auto">
-                <Button size="icon-sm" variant="outline" aria-label="Previous page" disabled={activePage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft /></Button>
-                <span className="min-w-20 text-center text-xs tabular-nums">Page {activePage} / {pageCount}</span>
-                <Button size="icon-sm" variant="outline" aria-label="Next page" disabled={activePage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}><ChevronRight /></Button>
-              </div>
-            </div>
-          )}
         </CardContent>
       </Card>
 

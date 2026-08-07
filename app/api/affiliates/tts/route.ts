@@ -85,7 +85,9 @@ function rateOrNull(n: number, d: number | null): number | null {
 }
 
 export async function GET(req: NextRequest) {
-  if (!(await isAuthed(req))) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const bearer = req.headers.get('authorization');
+  const cronOk = !!process.env.CRON_SECRET && bearer === `Bearer ${process.env.CRON_SECRET}`;
+  if (!cronOk && !(await isAuthed(req))) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const sp = req.nextUrl.searchParams;
   // Default = all-time (Runable's earliest data starts late 2025; 2027 is a future ceiling)
   const fromStr = sp.get('from') ?? '2025-01-01';
@@ -93,10 +95,29 @@ export async function GET(req: NextRequest) {
   const from = new Date(fromStr + (fromStr.includes('T') ? '' : 'T00:00:00Z'));
   const to = new Date(toStr + (toStr.includes('T') ? '' : 'T00:00:00Z'));
 
-  const cacheKey = `${from.toISOString()}|${to.toISOString()}`;
+  const force = sp.get('force') === '1';
+  const cacheKey = `tts:${from.toISOString()}|${to.toISOString()}`;
   const cached = CACHE.get(cacheKey);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+  if (!force && cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return NextResponse.json(cached.data);
+  }
+
+  // Durable Postgres cache: serves instantly across serverless cold starts.
+  // The hourly cron re-warms preset windows with force=1, so a <24h row is
+  // the freshest computation available without blocking the user.
+  if (!force) {
+    try {
+      const [row] = await sql`
+        SELECT payload, generated_at FROM api_cache
+        WHERE key = ${cacheKey} AND generated_at > NOW() - INTERVAL '24 hours'
+      `;
+      if (row?.payload) {
+        CACHE.set(cacheKey, { at: Date.now(), data: row.payload });
+        return NextResponse.json(row.payload);
+      }
+    } catch (err) {
+      console.error('tts api_cache read failed:', err);
+    }
   }
 
   if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from >= to) {
@@ -385,6 +406,11 @@ export async function GET(req: NextRequest) {
   // useful on a transient failure, but that degraded result must not linger.
   if (timings.length > 0) {
     CACHE.set(cacheKey, { at: Date.now(), data: payload });
+    sql`
+      INSERT INTO api_cache (key, payload, generated_at)
+      VALUES (${cacheKey}, ${JSON.stringify(payload)}::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE SET payload = EXCLUDED.payload, generated_at = NOW()
+    `.catch((err) => console.error('tts api_cache write failed:', err));
   }
   return NextResponse.json(payload);
 }
