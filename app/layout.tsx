@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Affiliate Commission Dashboard",
+  title: "Runable Affiliates",
   description: "Runable affiliate performance dashboard",
 };
 
