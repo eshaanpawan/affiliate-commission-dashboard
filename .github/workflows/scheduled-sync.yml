@@ -1,0 +1,34 @@
+name: Scheduled data sync
+
+# Independent scheduler for the dashboard's sync endpoints. Vercel's cron
+# invocations have been observed silently not firing; GitHub Actions provides
+# a second trigger. Endpoints are idempotent upserts, so double-firing when
+# both schedulers work is harmless.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # Rewardful + Dub full sync
+    - cron: '5 * * * *'      # PostHog traffic + geo + funnel cache warm (hourly)
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Full source sync (Rewardful + Dub)
+        if: github.event.schedule != '5 * * * *'
+        run: |
+          curl -sf -X POST "https://affiliates-commission-dashboard.vercel.app/api/sync" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            --max-time 590 -o /dev/null -w "sync HTTP %{http_code} in %{time_total}s\n"
+      - name: PostHog sync + funnel cache warm
+        if: github.event.schedule == '5 * * * *' || github.event_name == 'workflow_dispatch'
+        run: |
+          curl -sf "https://affiliates-commission-dashboard.vercel.app/api/cron/posthog" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            --max-time 590 -o /dev/null -w "posthog HTTP %{http_code} in %{time_total}s\n"
